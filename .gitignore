@@ -1,5 +1,7 @@
-pipeline/.cache/
 __pycache__/
 *.pyc
 .DS_Store
 node_modules/
+Thumbs.db
+.claude
+.claude/*

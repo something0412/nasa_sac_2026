@@ -2,11 +2,71 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Analog Finder</title>
-<!-- GitHub Pages serves the repo root; the app lives in web/. -->
-<meta http-equiv="refresh" content="0; url=web/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Junior Astronaut Mission Trainer</title>
+<link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<p><a href="web/">Open Analog Finder</a></p>
+<header class="top">
+  <div class="brand">🌙 <b>Shackleton Base</b> <span class="sub">Junior Astronaut Mission Trainer</span></div>
+  <div class="clock"><span id="clockDay">Day 1</span><span id="clockHour">00:00</span><span id="scenarioTag" class="tag"></span></div>
+  <div class="speed" role="group" aria-label="Game speed">
+    <button data-speed="0" title="Pause (Space)">⏸</button>
+    <button data-speed="1" class="on" title="Normal speed">▶</button>
+    <button data-speed="2" title="Fast">▶▶</button>
+    <button data-speed="4" title="Very fast">▶▶▶</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="stage">
+    <div class="canvasWrap"><canvas id="map" width="800" height="560" aria-label="Moon base map"></canvas>
+      <div id="tooltip" class="tooltip" hidden></div>
+      <div id="buildHint" class="buildHint" hidden></div>
+    </div>
+    <div class="forecast">
+      <div class="forecastHead">☀️ Sunlight forecast <span class="muted">(yellow = Sun shines, dark = shadow, ▲ = now)</span></div>
+      <canvas id="forecast" width="800" height="54"></canvas>
+    </div>
+    <div id="capcom" class="capcom"><b>CAPCOM:</b> <span id="capcomText">Standing by.</span></div>
+  </section>
+
+  <aside class="panel">
+    <div class="card">
+      <h2>Supplies</h2>
+      <div id="bars"></div>
+    </div>
+    <div class="card">
+      <h2>Power <span id="powerLine" class="muted"></span></h2>
+      <div id="powerBar" class="powerBar"><div class="make"></div><div class="use"></div></div>
+    </div>
+    <div class="card">
+      <h2>Build <span class="muted">(parts: <b id="parts">0</b>)</span></h2>
+      <div id="buildMenu" class="buildMenu"></div>
+      <div class="actions">
+        <button id="bermBtn" class="wide">⛰️ Shield habitat with moon dirt <small>(0 parts, 36 crew-hours)</small></button>
+        <button id="shelterBtn" class="wide">🛡️ Send crew to shelter</button>
+      </div>
+      <div id="jobLine" class="muted small"></div>
+    </div>
+    <div class="card">
+      <h2>Why is this happening?</h2>
+      <div id="chains" class="chains"></div>
+    </div>
+    <div class="card">
+      <h2>Mission log</h2>
+      <ol id="log" class="log"></ol>
+    </div>
+  </aside>
+</main>
+
+<div id="modal" class="modal" hidden><div class="modalBox" role="dialog" aria-modal="true"><div id="modalBody"></div></div></div>
+
+<script src="data/may2024.js"></script>
+<script src="js/config.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>

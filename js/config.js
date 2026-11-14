@@ -5,7 +5,7 @@
   const MT = (root.MT = root.MT || {});
 
   MT.CONFIG = {
-    missionHours: 720, // 30 days
+    missionHours: 720, // 30 days # hello 
     crew: 4,
     workers: 2, // astronauts who go outside to build (EVA)
 

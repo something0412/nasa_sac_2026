@@ -77,8 +77,9 @@
     }
 
     const center = (m) => ({ x: (m.c + m.w / 2) * T, y: (m.r + m.h / 2) * T });
+    let frac = 0; // fraction of the current game hour, so the Sun glides instead of jumping each hour
     const sunVec = (state) => {
-      const a = (MT.Sim.sunAz(state, state.hour) * Math.PI) / 180;
+      const a = (MT.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
       return { x: Math.cos(a), y: Math.sin(a) };
     };
 
@@ -197,6 +198,7 @@
     // ---------- main draw ----------
     function draw(state, dt, ui) {
       if (!ground) buildGround(state);
+      frac = ui.frac || 0;
       time += dt;
       dashOffset -= dt * 28;
       const blink = Math.floor(time * 2.5) % 2 === 0;

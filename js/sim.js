@@ -289,7 +289,7 @@
       say('info', `Earth news: geomagnetic storm (Kp ${g.kpMax})`, g.kpMax >= 8 ? 'Huge auroras on Earth tonight! Earth\'s magnetic field protects people there. The Moon has no magnetic field.' : 'Auroras on Earth. The Moon has no magnetic field to protect you.');
     }
     for (const s of state.storms) {
-      if (!s.warned && h >= s.h - C.rad.warnLead) {
+      if (!s.warned && h + 1 >= s.h - C.rad.warnLead) { // +1: the clock shows hour h+1 right after this step
         s.warned = true;
         say('bad', s.strong ? '☢️ STRONG radiation storm incoming!' : '☢️ Radiation storm incoming',
           (hasShelter(state) ? 'Particles arrive in about 2 hours. Move the crew to the Storm Shelter?' : 'Particles arrive in about 2 hours. You have NO storm shelter. Crew inside the habitat get half the radiation; crew outside get all of it.') +
@@ -555,7 +555,39 @@
     return out;
   }
 
+  // ---------- countdowns for the status bar ----------
+  // now = state.hour + fraction of the current hour. Returns what is coming, soonest first.
+  function upcoming(state, now) {
+    const C = cfg(), out = [];
+    // Radiation storms: only known after the warning (forecasters see the flare first).
+    for (const s of state.storms) {
+      if (s.warned && now < s.h) {
+        out.push({ kind: 'storm', icon: '☢️', level: 'bad', left: s.h - now, total: C.rad.warnLead,
+          label: `${s.strong ? 'STRONG radiation storm' : 'Radiation storm'} arrives in` });
+      }
+    }
+    if (state.stormRate > 0.3) {
+      // Look ahead to when all storms fade below the "active" level.
+      let end = Math.floor(now);
+      while (end < now + 120 && stormRateAt(state, end + 0.5) > 0.3) end++;
+      const started = Math.min(...state.storms.filter((s) => s.h <= now && stormRateAt(state, now) > 0).map((s) => s.h));
+      out.push({ kind: 'stormActive', icon: '☢️', level: 'bad', left: Math.max(0, end - now), total: Math.max(1, end - started),
+        label: state.sheltering ? 'Storm active (crew sheltered) · ends in about' : 'Storm active · ends in about' });
+    }
+    // Next cargo lander.
+    const i = state.cargo.findIndex((k) => !k.arrived);
+    if (i >= 0) {
+      const k = state.cargo[i];
+      const prev = i > 0 ? state.cargo[i - 1].h : 0;
+      const what = k.choice ? C.cargoOptions[k.choice].name : k.asked ? 'contents not chosen yet!' : 'you choose 2 days before';
+      out.push({ kind: 'cargo', icon: '🚀', level: k.asked && !k.choice ? 'warn' : 'info', left: k.h - now, total: k.h - prev,
+        label: `Cargo #${i + 1} (${what}) lands in` });
+    }
+    return out.sort((a, b) => a.left - b.left);
+  }
+
   MT.Sim = {
+    upcoming, stormRateAt,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo,
     causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLitAt, currentJob, workersOutside, hasShelter, batteryCap, needOf, built, fmtDay, day,
   };

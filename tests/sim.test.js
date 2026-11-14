@@ -75,6 +75,21 @@ test('each coming shadow is warned about exactly once', () => {
   assert.strictEqual(titles.filter((t) => /ridge/.test(t)).length, 1, titles.join(' | '));
 });
 
+test('countdown bar: cargo always shown, storm only after its warning', () => {
+  const st = S.create({ scenario: 'history', seed: 1 });
+  goodSetup(st);
+  const first = S.upcoming(st, 0);
+  assert.ok(first.some((i) => i.kind === 'cargo' && Math.abs(i.left - 240) < 1e-9));
+  assert.ok(!first.some((i) => i.kind === 'storm'), 'no storm countdown before the warning');
+  const storm = st.storms[0];
+  while (!storm.warned) S.step(st);
+  const s = S.upcoming(st, st.hour).find((i) => i.kind === 'storm');
+  assert.ok(s, 'storm countdown appears after the warning');
+  assert.ok(s.left > 1 && s.left <= 2, 'countdown should start near 2 h, got ' + s.left);
+  while (st.hour < Math.ceil(storm.h) + 3) S.step(st);
+  assert.ok(S.upcoming(st, st.hour).some((i) => i.kind === 'stormActive'), 'active storm shows when it ends');
+});
+
 test('building rules', () => {
   const st = S.create({ scenario: 'training', seed: 2 });
   assert.strictEqual(S.canPlace(st, 'drill', 1, 1).ok, false, 'drill only on ice');

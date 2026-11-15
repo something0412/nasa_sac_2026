@@ -501,13 +501,71 @@
   }
 
   // ----- rover: fast travel between HABs -----
+  function roverParkingSpots(state, H) {
+    const C = cfg(), spots = [];
+    for (let c = H.c; c < H.c + H.w; c++) spots.push({ c, r: H.r + H.h });
+    for (let r = H.r; r < H.r + H.h; r++) spots.push({ c: H.c + H.w, r }, { c: H.c - 1, r });
+    for (let c = H.c; c < H.c + H.w; c++) spots.push({ c, r: H.r - 1 });
+    return spots.filter((p) => p.c >= 0 && p.r >= 0 && p.c < C.map.cols && p.r < C.map.rows && !moduleAt(state, p.c, p.r))
+      .map((p) => ({ c: p.c + 0.5, r: p.r + 0.5 }));
+  }
+
+  // Four-way steps through tile centres leave room for the rover's wheels beside building footprints.
+  function findRoverRoute(state, start, destination) {
+    const { cols, rows } = cfg().map;
+    const key = (p) => Math.floor(p.r) * cols + Math.floor(p.c);
+    const goals = new Set(roverParkingSpots(state, destination).map(key));
+    if (!start || !goals.size) return null;
+    const blocked = new Uint8Array(cols * rows);
+    for (const m of state.modules) for (let r = m.r; r < m.r + m.h; r++) for (let c = m.c; c < m.c + m.w; c++) blocked[r * cols + c] = 1;
+    const first = key(start), previous = new Int32Array(cols * rows).fill(-1), queue = [first];
+    previous[first] = first;
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head], c = current % cols, r = Math.floor(current / cols);
+      if (goals.has(current)) {
+        const path = [];
+        for (let cell = current; ; cell = previous[cell]) {
+          path.push({ c: cell % cols + 0.5, r: Math.floor(cell / cols) + 0.5 });
+          if (cell === first) return path.reverse();
+        }
+      }
+      for (const [dc, dr] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+        const nc = c + dc, nr = r + dr, next = nr * cols + nc;
+        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows || blocked[next] || previous[next] !== -1) continue;
+        previous[next] = current;
+        queue.push(next);
+      }
+    }
+    return null;
+  }
+
+  // Shared grid-space animation ensures the two views follow exactly the same route.
+  function roverPosition(state, fraction) {
+    const rv = state.rover;
+    if (!rv) return null;
+    const H = state.modules.find((m) => m.id === rv.habId);
+    const parked = rv.parked || roverParkingSpots(state, H)[0];
+    if (!rv.trip) return parked ? { ...parked, dir: rv.dir || { c: 1, r: 0 }, moving: false } : null;
+    const to = state.modules.find((m) => m.id === rv.trip.to);
+    const path = rv.trip.path || findRoverRoute(state, parked, to);
+    if (!path) return parked ? { ...parked, dir: { c: 1, r: 0 }, moving: false } : null;
+    const t = Math.max(0, Math.min(1, (rv.trip.total - rv.trip.left + (fraction || 0)) / rv.trip.total));
+    const distance = t * t * (3 - 2 * t) * (path.length - 1);
+    const index = Math.min(Math.floor(distance), Math.max(0, path.length - 2));
+    const a = path[index], b = path[index + 1] || a, along = distance - index;
+    return { c: a.c + (b.c - a.c) * along, r: a.r + (b.r - a.r) * along,
+      dir: path.length > 1 ? { c: b.c - a.c, r: b.r - a.r } : { c: 1, r: 0 }, moving: true, riders: rv.trip.crew.length };
+  }
+
   /** Buy the rover (once). It starts parked at the first HAB. */
   function buyRover(state) {
     const C = cfg();
     if (state.rover) return { ok: false, why: 'You already have a rover.' };
+    const parked = roverParkingSpots(state, hab(state))[0];
+    if (!parked) return { ok: false, why: 'The rover needs a clear parking tile beside the HAB.' };
     if (state.res.parts < C.rover.cost) return { ok: false, why: `The rover needs ${C.rover.cost} parts (you have ${state.res.parts}).` };
     state.res.parts -= C.rover.cost;
-    state.rover = { habId: hab(state).id, trip: null };
+    state.rover = { habId: hab(state).id, trip: null, parked };
     log(state, 'good', `Rover built! It is parked at ${habName(state, hab(state))}.`);
     return { ok: true };
   }
@@ -530,9 +588,12 @@
     const ok = roverRiders(state).map((a) => a.id);
     const crew = want.filter((id) => ok.includes(id));
     if (!crew.length) return { ok: false, why: 'Pick at least one astronaut who is at this HAB.' };
-    const dist = Math.hypot(to.c - from.c, to.r - from.r);
+    const start = rv.parked || roverParkingSpots(state, from)[0];
+    const path = findRoverRoute(state, start, to);
+    if (!path) return { ok: false, why: 'No clear rover route to that HAB. Leave an open path around the buildings.' };
+    const dist = path.length - 1;
     const hours = Math.max(1, Math.ceil(dist / C.rover.tilesPerH));
-    rv.trip = { from: from.id, to: to.id, crew, left: hours, total: hours };
+    rv.trip = { from: from.id, to: to.id, crew, left: hours, total: hours, path };
     for (const a of state.crew) if (crew.includes(a.id)) Object.assign(a, { trip: true, job: null, gymLeft: 0, gymId: null, where: 'rover' });
     log(state, 'info', `Rover: ${crew.length} astronaut${crew.length > 1 ? 's' : ''} driving from ${habName(state, from)} to ${habName(state, to)} (${hours} h).`);
     return { ok: true, hours };
@@ -624,6 +685,11 @@
     // (HABs are built like everything else: 15 parts, one Engineer.)
     if (c < 0 || r < 0 || c + d.w > C.map.cols || r + d.h > C.map.rows) return { ok: false, why: 'Outside the map' };
     for (let dc = 0; dc < d.w; dc++) for (let dr = 0; dr < d.h; dr++) if (moduleAt(state, c + dc, r + dr)) return { ok: false, why: 'Something is already here' };
+    if (state.rover) {
+      const position = roverPosition(state, 0);
+      const reserved = state.rover.trip?.path || (position ? [position] : []);
+      if (reserved.some((p) => p.c >= c && p.c < c + d.w && p.r >= r && p.r < r + d.h)) return { ok: false, why: 'The rover needs this tile for parking or its current route.' };
+    }
     if (state.res.parts < d.cost) return { ok: false, why: `Needs ${d.cost} parts (you have ${state.res.parts})` };
     const z = zoneOf(state, c, r);
     if (d.onlyZone && z !== d.onlyZone) return { ok: false, why: 'Ice Drill must go on the dark ice area' };
@@ -1150,9 +1216,11 @@
     // Rover trip: one hour closer. On arrival the riders live at the new HAB, and the rover stays there.
     const rv = state.rover;
     if (rv && rv.trip && --rv.trip.left <= 0) {
+      const arrival = roverPosition(state, 0);
       const to = state.modules.find((m) => m.id === rv.trip.to);
       const riders = state.crew.filter((a) => a.trip);
       for (const a of riders) { a.trip = false; a.homeId = to.id; a.where = 'hab'; }
+      if (arrival) { rv.parked = { c: arrival.c, r: arrival.r }; rv.dir = arrival.dir; }
       rv.habId = to.id; rv.trip = null;
       say('good', `🚙 The rover arrived at ${habName(state, to)}`, riders.length ? `${riders.map((a) => a.name).join(', ')} now live${riders.length > 1 ? '' : 's'} there.` : '');
     }
@@ -1475,7 +1543,7 @@
     useTower, towerReadyIn, startResearch, resumeTask, researchCost, plannedLevel, tendGreenhouse, sendToGym, assignWorker, boostOf, inLabRange, solarKw,
     causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, jobList, activeCrew, allCrew, crewById, crewSummary, isSlow, isGrounded, isExposed,
     hasShelter, batteryCap, needOf, built, fmtDay, day,
-    habs, habName, homeOf, bermKey, joinCrew, landingSpots, padNearHab, homeForPad, buyRover, roverRiders, startTrip, extendWorld,
+    habs, habName, homeOf, bermKey, joinCrew, landingSpots, padNearHab, homeForPad, buyRover, roverRiders, startTrip, roverPosition, extendWorld,
 
 
 

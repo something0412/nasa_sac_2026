@@ -1,7 +1,20 @@
-# Junior Astronaut Mission Trainer: Shackleton Base
+# Junior Astronaut Mission Trainer: Zain Base
 
-A 2D browser game for NASA Space Apps 2026. You run a Moon base at the lunar south pole and keep
-4 astronauts alive for 30 days by balancing **power, oxygen, water, food and radiation**.
+A 2D browser game for NASA Space Apps 2026. You run a Moon base at the lunar south pole and keep it going
+for as many days as you can by balancing **power, oxygen, water, food and radiation**. The game is
+endless: it only ends when no astronaut is left on the Moon.
+
+- Every **30 days** a crew spaceship comes (announced 5 days before). It can only land on a finished
+  **Landing Pad** (10 parts) within 6 squares of a finished **HAB** (15 parts, built by an Engineer). Then it
+  touches down on the pad (animation), brings **2 new astronauts** whose jobs you choose, and restocks the
+  medbay. They live in the HAB closest to the pad they landed on (with several ready pads, you pick the pad).
+  No two Landing Pads may be within 6 squares of each other, so each pad clearly belongs to one HAB.
+  No such pad when it arrives = it flies back, and the next one comes 30 days later.
+- Every game also opens with the crew's spaceship landing at the base (animation only).
+- Running out of oxygen, heat (habitat below 5 °C), food (3 days) or water (2 days) makes the astronauts lose
+  health every hour; when an astronaut's health runs out they are sent home to Earth.
+- Cargo landers come every 10 days. Game speed: 1 game hour = 2 s at ▶ (▶▶ and ▶▶▶ are 2x and 4x).
+
 
 ## Play it
 
@@ -12,16 +25,23 @@ python -m http.server 8137
 Open http://localhost:8137. (Double-clicking `index.html` also works: no build step, no internet.)
 
 Controls: **always pick an astronaut first** (buttons at the top of Build, an AMS card, the astronaut on the
-map, or Shift+1-4), then pick what they do:
-- Engineers (Astronaut 1, 2): pick a build button (or keys 1-9) and click the map; click a damaged module
+map, or Shift+1-9), then pick what they do:
+- Engineers (Astronaut 1, 2 at the start): pick a build button (or keys 1-9) and click the map; click a damaged module
   (cracks + 🔧) to repair it (1 part); click a building site (or the habitat, for the shield) to give them that job.
-- Scientist (Astronaut 3): click a Research Bay to research an upgrade (1 day in the lab).
-- Botanist (Astronaut 4): click a greenhouse to tend it for 1 day (2x food).
+- Scientists (Astronaut 3 at the start): click a Research Bay to research an upgrade (1 day in the lab).
+- Botanists (Astronaut 4 at the start): click a greenhouse to tend it for 1 day (2x food).
 - Sending the crew to the shelter puts research / greenhouse work on hold. Afterwards, pick the Scientist or
   Botanist and click the Research Bay / greenhouse again: the hours that were left carry on.
   (Inside the lab and greenhouse the radiation is the same as in the habitat.)
 - Anyone: click an Astronomy Tower (their stress -30; each tower every 12 h) or a Fitness Center (2 h of
   training). Nobody trains by themselves: send each astronaut about once a day ("🏋️ Needs training" in the AMS).
+- 🚙 Rover (button in the Build panel, 15 parts): fast travel. Pick up to 4 astronauts who live at the rover's HAB
+  and another HAB to drive to. The rover stays where it arrives, so the next trip starts there.
+  (The rover model and animation are temporary placeholders.)
+- 🏠 HAB and 🛬 Landing Pad are at the bottom of the build menu (no number keys). While placing a pad, gold
+  circles show how close to a HAB it must be, red circles where another pad is too close. An astronaut's home
+  HAB only changes with a rover trip.
+  ⛰️ The moon-dirt shield goes on the picked Engineer's HAB.
 
 
 With nobody picked, click a module to turn it ON/OFF, or a building site to cancel it (parts back).

@@ -109,6 +109,10 @@
       zoom = next;
       moveTo(wx - p.x / zoom, wy - p.y / zoom);
     }
+    /** Look at a grid point (c, r can be fractions). */
+    function centerOnTile(c, r, smooth) { const p = up(P(c, r), liftAt(c, r)); centerOn(p.x, p.y, smooth); }
+    /** Where a grid point is on the screen right now (pixels from the map's top-left corner). */
+    function screenOf(c, r) { const p = up(P(c, r), liftAt(c, r)); return { x: (p.x - cam.x) * zoom, y: (p.y - cam.y) * zoom }; }
     function centerOnBase(state, smooth) {
       const hab = state.modules.find((m) => m.type === 'hab');
       const p = up(mid(hab), liftOf(hab));
@@ -271,7 +275,7 @@
     const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
     // How tall each building is drawn (pixels). Used for the block, labels and status icons.
-    const HEIGHT = { hab: 26, solar: 34, battery: 22, o2gen: 18, greenhouse: 20, drill: 32, shelter: 16, gym: 7, tower: 30, lab: 18 };
+    const HEIGHT = { hab: 26, solar: 34, battery: 22, o2gen: 18, greenhouse: 20, drill: 32, shelter: 16, gym: 7, tower: 30, lab: 18, pad: 3 };
 
     // ---------- buildings ----------
     // Buildings are drawn as if on flat ground, moved up (or down into a crater) to their terrace.
@@ -290,8 +294,9 @@
       ctx.lineWidth = 1;
       switch (m.type) {
         case 'hab': {
-          if (state.berm.built || state.berm.building) { // moon-dirt shield piled around the habitat
-            const f = state.berm.built ? 1 : state.berm.progress / C.bermWork;
+          const BM = m.berm || { built: false, building: false }; // each HAB has its own moon-dirt shield
+          if (BM.built || BM.building) { // moon-dirt shield piled around the habitat
+            const f = BM.built ? 1 : BM.progress / C.bermWork;
             ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y, 2.1 * HW * 0.62, 2.1 * HH * 0.62, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
             ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 12; ctx.stroke(); ctx.lineWidth = 1;
           }
@@ -304,14 +309,15 @@
           ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y - (ht - 10), HW * 0.95, HW * 0.55, 0, Math.PI, 0);
           ctx.fillStyle = '#eef1f5'; ctx.fill(); ctx.strokeStyle = '#8f96a3'; ctx.stroke();
           // windows on the two front walls
-          const win = on ? (state.habTemp < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
+          const win = on ? ((m.temp != null ? m.temp : state.habTemp) < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
           ctx.fillStyle = win;
           for (const t of [0.3, 0.7]) {
             const a = { x: f[3].x + (f[2].x - f[3].x) * t, y: f[3].y + (f[2].y - f[3].y) * t };
             const b = { x: f[2].x + (f[1].x - f[2].x) * t, y: f[2].y + (f[1].y - f[2].y) * t };
             ctx.fillRect(a.x - 3, a.y - 12, 6, 6); ctx.fillRect(b.x - 3, b.y - 12, 6, 6);
           }
-          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('HAB', ctr.x, ctr.y - ht + 2);
+          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+          ctx.fillText(MT.Sim.habs(state).length > 1 && m.built ? MT.Sim.habName(state, m) : 'HAB', ctr.x, ctr.y - ht + 2);
           break;
         }
         case 'solar': {
@@ -420,6 +426,19 @@
           if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(f[1].x - 4, f[1].y - 16, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
           break;
         }
+        case 'pad': {
+          // Landing Pad: a flat platform with an "H" and corner lights (blinking = ready for a spaceship).
+          const ready = m.built && MT.Sim.landingSpots(state).some((sp) => sp.pad === m);
+          const f = footprint(m.c, m.r, m.w, m.h, 0.08);
+          prism(f, ht, '#5d5f66', '#45474d', '#505259', '#9aa2af');
+          ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y - ht, HW * 1.15, HH * 1.15, 0, 0, Math.PI * 2);
+          ctx.setLineDash([6, 5]); ctx.strokeStyle = '#d9dde4'; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+          ctx.save(); ctx.translate(ctr.x, ctr.y - ht); ctx.scale(1, 0.5);
+          ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 26px system-ui'; ctx.textAlign = 'center'; ctx.fillText('H', 0, 9);
+          ctx.restore();
+          for (const q of f) { ctx.fillStyle = ready ? (blink ? '#5fe08a' : '#2e6b43') : '#59636f'; ctx.beginPath(); ctx.arc(q.x + (ctr.x - q.x) * 0.15, q.y - ht + (ctr.y - q.y) * 0.15, 2.5, 0, Math.PI * 2); ctx.fill(); }
+          break;
+        }
         case 'lab': {
           // Research Bay: a low lab block with a round window; a flask on the roof glows while the Scientist works.
           const busy = state.crew.some((a) => !a.medbay && a.task && a.task.kind === 'lab' && a.task.id === m.id);
@@ -517,7 +536,35 @@
       ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), p.x, p.y - 27.5);
     }
 
+    // ---------- the rover (TEMPORARY model: a small box on 4 wheels, to be replaced with better art later) ----------
+    // Position in grid squares: parked next to its HAB, or on the way between two HABs.
+    function roverAt(state) {
+      const rv = state.rover;
+      if (!rv) return null;
+      const parked = (id) => { const H = state.modules.find((m) => m.id === id); return { c: H.c + H.w + 0.3, r: H.r + H.h + 0.2 }; };
+      if (!rv.trip) return { ...parked(rv.habId), dir: { c: 1, r: 0 }, moving: false };
+      const a = parked(rv.trip.from), b = parked(rv.trip.to);
+      const t = Math.max(0, Math.min(1, (rv.trip.total - rv.trip.left + frac) / rv.trip.total)), e = t * t * (3 - 2 * t);
+      const L = Math.hypot(b.c - a.c, b.r - a.r) || 1;
+      return { c: a.c + (b.c - a.c) * e, r: a.r + (b.r - a.r) * e, dir: { c: (b.c - a.c) / L, r: (b.r - a.r) / L }, moving: true, riders: rv.trip.crew.length };
+    }
+    function drawRover(p) {
+      const g = up(P(p.c, p.r), liftAt(p.c, p.r)), fw = gridDir(p.dir.c * 0.28, p.dir.r * 0.28), sd = gridDir(-p.dir.r * 0.17, p.dir.c * 0.17);
+      if (p.moving && Math.random() < 0.5) spawn(1, g.x - fw.x * 1.4, g.y - fw.y * 1.4, (Math.random() - 0.5) * 20, -Math.random() * 10, 0.6, 'rgba(200,200,205,0.7)');
+      const f = [{ x: g.x + fw.x + sd.x, y: g.y + fw.y + sd.y }, { x: g.x + fw.x - sd.x, y: g.y + fw.y - sd.y }, { x: g.x - fw.x - sd.x, y: g.y - fw.y - sd.y }, { x: g.x - fw.x + sd.x, y: g.y - fw.y + sd.y }];
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(g.x, g.y + 2, 12, 5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#2b2f36'; for (const q of f) { ctx.beginPath(); ctx.arc(q.x, q.y, 2.6, 0, Math.PI * 2); ctx.fill(); } // wheels
+      ctx.beginPath(); ctx.moveTo(f[0].x, f[0].y - 3); for (let k = 1; k < 4; k++) ctx.lineTo(f[k].x, f[k].y - 3); ctx.closePath();
+      ctx.fillStyle = '#c9a63a'; ctx.fill(); // chassis
+      ctx.beginPath(); ctx.moveTo(f[0].x, f[0].y - 8); for (let k = 1; k < 4; k++) ctx.lineTo(f[k].x, f[k].y - 8); ctx.closePath();
+      ctx.fillStyle = '#e8c547'; ctx.fill(); ctx.strokeStyle = '#8a7a2e'; ctx.lineWidth = 1; ctx.stroke(); // roof
+      ctx.fillStyle = '#7fd0ff'; ctx.beginPath(); ctx.arc(g.x + fw.x * 0.6, g.y + fw.y * 0.6 - 8, 2.2, 0, Math.PI * 2); ctx.fill(); // window
+      ctx.strokeStyle = '#c9d1dc'; ctx.beginPath(); ctx.moveTo(g.x - fw.x * 0.6, g.y - fw.y * 0.6 - 8); ctx.lineTo(g.x - fw.x * 0.6, g.y - fw.y * 0.6 - 16); ctx.stroke(); // antenna
+      if (p.riders) { ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText('👩‍🚀' + p.riders, g.x, g.y - 20); }
+    }
+
     // ---------- meteor shower animation ----------
+
     function spawnMeteors(dt) {
       const want = 9 * dt;
       let n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
@@ -605,7 +652,7 @@
       // Object shadows point AWAY from the Sun, long and soft because the Sun is always low at the pole.
       const sg = sunGrid(state);
       for (const m of state.modules) {
-        if (!m.built) continue;
+        if (!m.built || m.type === 'pad') continue; // (flat pads cast no shadow)
         const L = lightAt(state, m);
         if (L < 0.02) continue;
         const len = (m.type === 'hab' ? 1.1 : m.type === 'solar' || m.type === 'drill' || m.type === 'tower' ? 0.9 : 0.5) * (1 + (1 - L) * 1.5);
@@ -622,7 +669,7 @@
       // power cables on the ground: yellow moving dashes = power flowing, red = no power
       ctx.lineWidth = 2;
       for (const m of state.modules) {
-        if (m.type === 'hab' || !m.built) continue;
+        if (!m.built || m === habM) continue; // (extra HABs get a cable to HAB 1)
         const c = up(mid(m), liftOf(m));
         let color, flow = 0;
         if (m.type === 'solar') { const lit = m.light > 0.02 && m.on; color = lit ? '#ffd36b' : '#4a4f5a'; flow = lit ? 1 : 0; }
@@ -634,7 +681,8 @@
         ctx.strokeStyle = color;
         ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
-        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
+        const to = m.type === 'hab' ? hc : MT.Sim.habs(state).map((h) => up(mid(h), liftOf(h))).reduce((b, p) => (Math.hypot(p.x - c.x, p.y - c.y) < Math.hypot(b.x - c.x, b.y - c.y) ? p : b), hc); // nearest HAB
+        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(to.x, to.y); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
 
@@ -646,6 +694,22 @@
       if (ui.buildType === 'lab' && ui.hover) rings.push(up(P(ui.hover.c + 0.5, ui.hover.r + 0.5), liftAt(ui.hover.c, ui.hover.r)));
       for (const l of MT.Sim.built(state, 'lab')) {
         if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...up(mid(l), liftOf(l)), dead: l.damaged });
+      }
+      // Placing a Landing Pad: gold rings show how close to a HAB it must be.
+      if (ui.buildType === 'pad') {
+        ctx.setLineDash([8, 6]); ctx.lineDashOffset = dashOffset * 0.5; ctx.lineWidth = 2;
+        for (const H of state.modules) if (H.type === 'hab') {
+          const p = up(mid(H), liftOf(H)), R = C.pad.radius * Math.SQRT2;
+          ctx.beginPath(); ctx.ellipse(p.x, p.y, R * HW, R * HH, 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,211,107,0.06)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,211,107,0.8)'; ctx.stroke();
+        }
+        // Red rings: no new pad may go inside another pad's area.
+        for (const P2 of state.modules) if (P2.type === 'pad') {
+          const p = up(mid(P2), liftOf(P2)), R = C.pad.radius * Math.SQRT2;
+          ctx.beginPath(); ctx.ellipse(p.x, p.y, R * HW, R * HH, 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,93,93,0.07)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,93,93,0.8)'; ctx.stroke();
+        }
+        ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       for (const g of rings) {
         const R = C.research.radius * Math.SQRT2;
@@ -664,18 +728,24 @@
       }
 
       // Astronauts: work out where each one is (in grid squares), walking toward where the AMS says they are.
-      const shelter = MT.Sim.built(state, 'shelter')[0];
+      const shelters = MT.Sim.built(state, 'shelter');
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
-      const hcg = { c: habM.c + habM.w / 2, r: habM.r + habM.h / 2 };
       const gmid = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
       const people = [];
+      // The rover (TEMPORARY model): drawn in depth order with everything else.
+      const rp = roverAt(state);
+      if (rp) people.push({ depth: rp.c + rp.r, draw: () => drawRover(rp) });
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
         const i = A.id - 1; // keyed by id, so someone leaving never moves the others' spots
         const a = crew[A.id] || (crew[A.id] = { c: 0, r: 0, init: false });
+        if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
+        const hcg = gmid(MT.Sim.homeOf(state, A)); // their own HAB
         let tc = hcg.c + Math.cos(i * 1.57 + 0.8) * 0.22, tr = hcg.r + Math.sin(i * 1.57 + 0.8) * 0.22;
         let visible = false;
-        if (A.where === 'shelter' && shelter) { const s = gmid(shelter); tc = s.c - 0.2 + i * 0.15; tr = s.r + 0.4; visible = true; }
+        const dist = (s) => Math.hypot(gmid(s).c - hcg.c, gmid(s).r - hcg.r);
+        const shelter = shelters.reduce((b, s) => (!b || dist(s) < dist(b) ? s : b), null); // the shelter closest to their HAB
+        if (A.where === 'shelter' && shelter) { const s = gmid(shelter); tc = s.c - 0.2 + (i % 4) * 0.15; tr = s.r + 0.4; visible = true; }
         else if (A.where === 'gym') {
           const g = state.modules.find((m) => m.id === A.gymId);
           if (g) { const gc = gmid(g); tc = gc.c + 0.3; tr = gc.r + 0.3; visible = true; }
@@ -684,10 +754,11 @@
           if (tm) { const g = gmid(tm); tc = g.c + 0.38 + Math.sin(time * 1.5 + i) * 0.04; tr = g.r + 0.38; visible = true; }
         } else if (A.where === 'outside') {
           const j = jobs.find((x) => x.key === A.job);
-          const jc = j && j.m ? gmid(j.m) : { c: hcg.c + Math.cos(time * 0.4 + i * 3) * 1.05, r: hcg.r + Math.sin(time * 0.4 + i * 3) * 1.05 };
+          const bc = j && j.m ? gmid(j.m) : hcg; // moon-dirt shield: walk around that HAB
+          const jc = j && j.m && j.kind !== 'berm' ? gmid(j.m) : { c: bc.c + Math.cos(time * 0.4 + i * 3) * 1.05, r: bc.r + Math.sin(time * 0.4 + i * 3) * 1.05 };
           tc = jc.c + 0.38 + Math.sin(time * 3 + i) * 0.07; tr = jc.r + 0.38; visible = true;
         }
-        if (!a.init) { a.c = tc; a.r = tr; a.init = true; }
+        if (!a.init) { a.c = tc; a.r = tr; a.z = null; a.init = true; } // (z: new terrace, e.g. after a rover trip)
         const dc = tc - a.c, dr = tr - a.r, d = Math.hypot(dc, dr), sp = (140 / 40) * dt; // same walking speed as the top-down map
         if (d > sp) {
           a.c += (dc / d) * sp; a.r += (dr / d) * sp;
@@ -796,7 +867,7 @@
     }
 
     return {
-      draw, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, resize, setSafeArea, zoomAt,
+      draw, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
 
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),

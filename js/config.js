@@ -5,8 +5,23 @@
   const MT = (root.MT = root.MT || {});
 
   MT.CONFIG = {
-    missionHours: 720, // 30 days
-    crew: 4,
+    // ENDLESS: the game keeps going until no astronaut is left on the Moon. The world (space weather,
+    // sunlight forecast, meteor showers) is made 30 days (chunkH) at a time, as the game goes on.
+    chunkH: 720,
+    crew: 4, // at the start; every crew spaceship brings more
+    endless: {
+      shipEveryH: 30 * 24, // GAME: a crew spaceship lands every 30 days...
+      shipWarnH: 5 * 24,   // ...announced 5 days before. It brings a new HAB, new astronauts, and restocks the medbay.
+      newCrew: 2,
+      // GAME: what running out of things does now (health lost per hour, per astronaut). The medbay can heal it.
+      harm: { noO2PerH: 8, coldPerH: 2, hungerPerH: 1, thirstPerH: 1.5 },
+    },
+    // ROVER (bought with a button, not built on the map): drives up to 4 astronauts between HABs.
+    rover: { cost: 15, seats: 4, tilesPerH: 12 }, // GAME: 12 tiles (120 m) per game hour, at least 1 hour per trip
+    // LANDING PAD: crew spaceships can only land on a finished Landing Pad that is within `radius` squares of a
+    // finished HAB (centre to centre), and no two pads may be within `radius` of each other (each pad has its own
+    // area, so it is clear which HAB its astronauts belong to). No such pad when the ship arrives = it turns back.
+    pad: { radius: 6 },
     // Every job (new building, repair, moon-dirt shield) gets exactly ONE astronaut: the Engineer the player
     // picked. The player always picks an astronaut first, then what they should build or use.
 
@@ -170,9 +185,14 @@
 
     modules: {
       hab: {
-        name: 'Habitat', icon: '🏠', w: 2, h: 2, cost: 0, work: 0, priority: 0,
+        name: 'Habitat', icon: '🏠', w: 2, h: 2, cost: 15, work: 16, priority: 0,
         power: 1.5, heatInDark: 1.0, // GAME: life systems + extra heaters when in shadow
-        desc: 'Home for 4 astronauts. Needs power for air fans, computers and heaters.',
+        desc: 'Home for the crew (2 x 2). Needs power for air fans, computers and heaters. New astronauts from a crew spaceship move into the HAB you choose.',
+      },
+      pad: {
+        name: 'Landing Pad', icon: '🛬', w: 2, h: 2, cost: 10, work: 8, // GAME: flat, packed moon dirt; no power
+        desc: 'Crew spaceships land here (every 30 days); the new astronauts live in the closest HAB. Must be within 6 squares of a HAB and more than 6 squares from any other pad. No pad next to a finished HAB = the ship turns back.',
+
       },
       solar: {
         name: 'Solar Panel', icon: '☀️', w: 1, h: 1, cost: 2, work: 6, makes: 4, // GAME: 4 kW tall vertical panel
@@ -216,7 +236,7 @@
 
       },
     },
-    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower', 'gym', 'lab'],
+    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower', 'gym', 'lab', 'hab', 'pad'], // keys 1-9 pick the first 9
     bermWork: 36, // crew-hours to pile regolith (moon dirt) on the habitat
 
     // REAL: an adult uses about 0.84 kg O2 and ~1.8 kg food (with packaging) per day (NASA BVAD, NASA/TP-2015-218570).
@@ -228,6 +248,7 @@
     rad: {
       surfacePerH: 1.369 / 24, // REAL: Chang'e-4 measured 1.369 mSv/day on the lunar surface (Zhang et al. 2020)
       hab: 0.5, habBerm: 0.2, shelter: 0.05, // GAME: fraction of radiation that gets through (gym = like the habitat)
+      rover: 0, // GAME: the rover is fully shielded: nobody gets any radiation while driving between HABs
       // (The old 250 mSv whole-crew limit is gone: each astronaut now has their own Health, see astro.hpPerMsv.)
       // REAL DATA: storm radiation is the dose NASA's Lunar Reconnaissance Orbiter actually measured
       // (CRaTER instrument, via NASA's RadLab API, saved in data/radlab.js by tools/build_radlab.py).
@@ -252,9 +273,10 @@
     },
 
     habTemp: { normal: 21, fail: 5, heat: 3, coolDark: 2.0, coolLit: 0.8 },
-    fail: { foodGraceH: 72, waterGraceH: 48 },
+    fail: { foodGraceH: 72, waterGraceH: 48 }, // after this long without food / water the crew starts losing health
 
-    cargo: [{ h: 240 }, { h: 480 }],
+    cargoEveryH: 240, // a cargo lander every 10 days (you choose what it carries 2 days before)
+
     cargoAskLead: 48,
     cargoOptions: {
       food: { name: 'Food pack', icon: '🍞', text: '+60 kg food', give: { food: 60 } },

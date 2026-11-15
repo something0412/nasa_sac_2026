@@ -11,14 +11,15 @@ python -m http.server 8137
 
 Open http://localhost:8137. (Double-clicking `index.html` also works: no build step, no internet.)
 
-Controls: click a build button (or keys 1-7), then click the map. Click a module to turn it ON/OFF.
+Controls: click a build button (or keys 1-8), then click the map. Click a module to turn it ON/OFF;
+click a damaged module (cracks + 🔧) to order a repair (1 part).
 Click a module that is still being built to cancel it. Space = pause. Esc / right-click = stop building.
 Drag the map to look around (the world is 80 x 56 tiles, the view shows 20 x 14). If the base is off-screen,
 a 🏠 BASE tag on the edge points the way; click it or press H to fly back.
 The map fills the whole window. The top bar has the speed buttons, the sunlight forecast and the day.
 On the map: CAPCOM, Why? and Mission log are small buttons on the left (click to expand; CAPCOM shows a dot
 when a new message arrives), Build is on the right, Supplies at the bottom.
-Click a panel's title bar (or keys S = Supplies, B = Build, W = Why?, C = CAPCOM, L = Log) to collapse/expand it.
+Click a panel's title bar (or keys S = Supplies, B = Build, A = AMS, W = Why?, C = CAPCOM, L = Log) to collapse/expand it.
 The choice is remembered per browser.
 
 ## What makes it different
@@ -57,7 +58,9 @@ Refresh the data: `python tools/build_may2024.py [YOUR_API_KEY]` and `python too
 
 - NASA DONKI space weather (api.nasa.gov): flare notifications, SEP and GST events, May 2024.
 - Lunar surface radiation 1.369 mSv/day: Chang'e-4 LND (Zhang et al. 2020, Science Advances).
-- 30-day crew limit 250 mGy-Eq: NASA-STD-3001.
+- Astronaut health: 100 HP = NASA's 600 mSv career radiation limit (NASA-STD-3001, 2022). In the habitat that lasts ~2.4 years.
+- Bone loss: ISS crews lose ~1-1.5% hip bone per month and exercise ~2 h/day; the game speeds this up to ~1%/day (GAME).
+- Meteor showers: the May 2024 mission has the real Eta Aquariids (~5 May 2024). Damage chances and stress rates are GAME-tuned.
 - O₂ 0.84 kg and food ~1.8 kg per person per day: NASA BVAD (NASA/TP-2015-218570).
 - Polar illumination idea: LRO LOLA illumination studies (Mazarico et al. 2011).
 - Storm radiation: real hourly dose measured at the Moon by NASA's Lunar Reconnaissance Orbiter (CRaTER),

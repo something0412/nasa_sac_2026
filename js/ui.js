@@ -31,12 +31,12 @@
       else hint.hidden = true;
     }
     // ----- floating panels: collapse to just their title bar, or expand (remembered in this browser) -----
-    const PANELS = ['supplies', 'build', 'why', 'capcom', 'log'];
+    const PANELS = ['supplies', 'build', 'ams', 'why', 'capcom', 'log'];
     const STORE_KEY = 'mt.panels.v3'; // v3: CAPCOM / Why? / Log start as small buttons
     let open = {};
     try { open = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) { open = {}; }
     const small = window.innerWidth < 980;
-    for (const p of PANELS) if (typeof open[p] !== 'boolean') open[p] = p === 'supplies' || (p === 'build' && !small);
+    for (const p of PANELS) if (typeof open[p] !== 'boolean') open[p] = p === 'supplies' || ((p === 'build' || p === 'ams') && !small);
     function applyPanels() {
       for (const p of PANELS) {
         const el = document.querySelector(`.panel[data-panel="${p}"]`);
@@ -63,16 +63,22 @@
     applyPanels();
 
     $('bermBtn').addEventListener('click', handlers.berm);
+    // AMS "🏥 Heal" buttons (the list is redrawn every game hour, so listen on the container).
+    $('ams').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-heal]');
+      if (b && handlers.heal) handlers.heal(+b.dataset.heal);
+    });
     $('shelterBtn').addEventListener('click', handlers.shelter);
     document.querySelectorAll('.speed button').forEach((b) => b.addEventListener('click', () => handlers.speed(+b.dataset.speed)));
 
     // ----- bars -----
     const barDefs = [
-      { key: 'o2', label: '🫁 Oxygen', unit: 'kg', max: () => C.caps.o2, perH: () => C.use.o2PerPersonH * C.crew },
-      { key: 'food', label: '🍞 Food', unit: 'kg', max: () => 150, perH: () => C.use.foodPerPersonH * C.crew },
+      // Only astronauts who are not in the medbay eat and breathe.
+      { key: 'o2', label: '🫁 Oxygen', unit: 'kg', max: () => C.caps.o2, perH: (s) => C.use.o2PerPersonH * Math.max(1, MT.Sim.activeCrew(s).length) },
+      { key: 'food', label: '🍞 Food', unit: 'kg', max: () => 150, perH: (s) => C.use.foodPerPersonH * Math.max(1, MT.Sim.activeCrew(s).length) },
       { key: 'water', label: '💧 Water', unit: 'kg', max: () => C.caps.water, perH: null },
       { key: 'battery', label: '🔋 Battery', unit: 'kWh', max: (s) => Math.max(1, s.power.cap), perH: null },
-      { key: 'dose', label: '☢️ Radiation', unit: 'mSv', max: () => C.rad.limit, bad: true },
+      { key: 'crew', label: '❤️ Crew', unit: 'HP', max: () => 100 },
       { key: 'temp', label: '🌡️ Habitat', unit: '°C', max: () => C.habTemp.normal },
     ];
     const bars = $('bars');
@@ -93,12 +99,15 @@
 
       for (const b of barDefs) {
         let v, frac, level = 'ok', text;
-        if (b.key === 'dose') { v = state.dose; frac = v / b.max(); level = v >= C.rad.warn ? 'bad' : v >= 75 ? 'warn' : 'ok'; text = `${Math.round(v)} / ${C.rad.limit} mSv`; }
-        else if (b.key === 'temp') { v = state.habTemp; frac = Math.max(0, (v - 0) / 21); level = v < 12 ? 'bad' : v < 19 ? 'warn' : 'ok'; text = `${r1(v)} °C`; }
+        if (b.key === 'crew') {
+          const cs = MT.Sim.crewSummary(state);
+          frac = cs.avgHp / 100; level = cs.active < cs.total || cs.avgHp < 40 ? 'bad' : cs.avgHp < 70 ? 'warn' : 'ok';
+          text = `${cs.active}/${cs.total} · ${Math.round(cs.avgHp)} HP`;
+        } else if (b.key === 'temp') { v = state.habTemp; frac = Math.max(0, (v - 0) / 21); level = v < 12 ? 'bad' : v < 19 ? 'warn' : 'ok'; text = `${r1(v)} °C`; }
         else {
           v = state.res[b.key]; frac = v / b.max(state);
           text = `${Math.round(v)} ${b.unit}`;
-          if (b.perH) { const d = v / b.perH() / 24; text += ` · ${r1(d)} d`; level = d < 2 ? 'bad' : d < 4 ? 'warn' : 'ok'; }
+          if (b.perH) { const d = v / b.perH(state) / 24; text += ` · ${r1(d)} d`; level = d < 2 ? 'bad' : d < 4 ? 'warn' : 'ok'; }
           else level = frac < 0.15 ? 'bad' : frac < 0.35 ? 'warn' : 'ok';
         }
         b.val.textContent = text;
@@ -131,15 +140,21 @@
       sb.innerHTML = !hasS ? '🛡️ Send crew to shelter <small>(build a Storm Shelter first)</small>'
         : state.sheltering ? '👩‍🚀 Crew is in the shelter: click to go back to work' : '🛡️ Send crew to shelter';
 
-      const job = MT.Sim.currentJob(state);
+      // Work queue: one astronaut per job, at most C.maxOutside outside at once.
+      const jobs = MT.Sim.jobList(state);
+      const jobName = (j) => j.kind === 'berm' ? 'Habitat shielding' : (j.kind === 'repair' ? 'Repair ' : '') + C.modules[j.m.type].name;
       let jl = '';
-      if (job) {
-        const name = job.kind === 'module' ? C.modules[job.m.type].name : 'Habitat shielding';
-        const left = job.kind === 'module' ? C.modules[job.m.type].work - job.m.progress : C.bermWork - state.berm.progress;
-        const queued = state.modules.filter((m) => !m.built).length - (job.kind === 'module' ? 1 : 0);
-        jl = state.sheltering ? `⏸ Building paused: crew is in the shelter.` : `🔧 2 astronauts outside building: ${name} (~${Math.ceil(left / C.workers)} h left)${queued > 0 ? ` · ${queued} more waiting` : ''}`;
+      if (jobs.length) {
+        if (state.sheltering) jl = `⏸ ${jobs.length} job${jobs.length > 1 ? 's' : ''} paused: crew is in the shelter.`;
+        else {
+          const working = jobs.filter((j) => j.worker);
+          jl = working.map((j) => `🔧 ${j.worker.name}: ${jobName(j)} (~${Math.ceil((j.total - j.done) / (MT.Sim.isSlow(j.worker) ? C.astro.stress.slowFactor : 1))} h left)`).join('\n');
+          const waiting = jobs.length - working.length;
+          if (waiting) jl += (jl ? '\n' : '') + `⏳ ${waiting} waiting (max ${C.maxOutside} astronauts outside, 1 per job)`;
+        }
       }
       $('jobLine').textContent = jl;
+      renderAms(state);
 
       // cause chains
       const chains = MT.Sim.causeChains(state);
@@ -150,6 +165,64 @@
       // log
       const items = state.log.slice(-9).reverse();
       $('log').innerHTML = items.map((l) => `<li class="${l.level}"><b>D${Math.floor(l.h / 24) + 1} ${String(l.h % 24).padStart(2, '0')}h</b> ${esc(l.text)}</li>`).join('');
+    }
+
+    // ----- Astronaut Management System: one card per astronaut -----
+    let lastAms = '';
+    function renderAms(state) {
+      const A = C.astro, jobs = MT.Sim.jobList(state);
+      const M = A.medbay, usesLeft = M.uses - state.medbayUses;
+      const place = (a) => {
+        if (a.medbay) return a.medbayWhy === 'bones' ? '🏥 In the medbay for good (bones too weak)' : '🏥 In the medbay for good (no health left)';
+        if (a.heal) return `🏥 Healing in the medbay (+${Math.round(a.heal.amount)} HP) · ${Math.ceil(a.heal.left)} h left`;
+        if (a.where === 'shelter') return '🛡️ In the storm shelter';
+        if (a.where === 'gym') return '🏋️ Training in the Fitness Center';
+        if (a.where === 'outside') {
+          const j = jobs.find((x) => x.key === a.job);
+          return '🔧 Outside: ' + (!j ? 'working' : j.kind === 'berm' ? 'piling moon dirt' : (j.kind === 'repair' ? 'repairing ' : 'building ') + C.modules[j.m.type].name);
+        }
+        return '🏠 In the habitat';
+      };
+      const pct = (v) => Math.max(0, Math.min(100, v)).toFixed(1);
+      const bar = (label, v, lvl, title) => `<div class="amsStat" data-level="${lvl}" title="${esc(title)}"><span>${label}</span><div class="track"><div class="fill" style="width:${pct(v)}%"></div></div><b>${Math.round(v)}</b></div>`;
+      // Health bar: colour = health now; PURPLE from the right = radiation damage (can never be healed);
+      // the empty part in between = injuries the medbay could heal.
+      const hpBar = (a, lvl) => {
+        const cap = MT.Sim.maxHp(a);
+        const title = `Health ${Math.round(a.hp)} HP. Radiation so far: ${Math.round(a.dose)} mSv (600 mSv = all health). ` +
+          `PURPLE = radiation damage, it never heals: the most this astronaut can ever get back to is ${Math.round(cap)} HP. ` +
+          (a.wounds.length ? `Injuries: ${a.wounds.map((w) => `${w.what} -${Math.round(w.hp)}`).join(', ')}. The medbay heals ${A.medbay.healHp} HP per treatment.` : 'No injuries.');
+        return `<div class="amsStat" data-level="${lvl}" title="${esc(title)}"><span>❤️ Health</span><div class="track hpTrack"><div class="fill" style="width:${pct(a.hp)}%"></div><div class="radCap" style="width:${pct(100 - cap)}%"></div></div><b>${Math.round(a.hp)}</b></div>`;
+      };
+      const html = `<div class="amsTop" title="The medbay can give ${M.uses} treatments in the whole mission. Each takes ${M.healH / 24} days and heals ${M.healHp} HP of injuries (never past the purple radiation limit).">🏥 Medbay treatments left: <b>${usesLeft} / ${M.uses}</b></div>` + state.crew.map((a) => {
+        const flags = [];
+        const B = A.bone;
+        if (!a.medbay && MT.Sim.isSlow(a)) flags.push('<span class="flag warn" title="Stress is high: works at half speed">😰 Slow</span>');
+        if (!a.medbay && a.bone < B.severeBelow) flags.push(`<span class="flag bad" title="Below ${B.severeBelow}%: injuries ${B.severeMult}x, extra stress, training half as effective. At 0% they go to the medbay for good.">🦴 Severe</span>`);
+        else if (!a.medbay && a.bone < B.fragileBelow) flags.push(`<span class="flag bad" title="Below ${B.fragileBelow}%: fractures ${B.fragileMult}x as likely and as harmful, extra stress, and not allowed outside">🦴 Fragile</span>`);
+        else if (!a.medbay && MT.Sim.isGrounded(a)) flags.push(`<span class="flag bad" title="Bone density below ${B.groundedBelow}%: not allowed outside">🦴 Grounded</span>`);
+        else if (!a.medbay && a.bone < B.injuryBelow) flags.push(`<span class="flag warn" title="Bone density below ${B.injuryBelow}%: can get small injuries">🦴 Weak bones</span>`);
+        let healBtn = '';
+        if (!a.medbay && !a.heal && a.wounds.length) {
+          const amt = MT.Sim.healAmount(a);
+          const capped = amt < M.healHp ? ` Only ${Math.round(amt)} HP here: health can't go past the purple radiation limit.` : '';
+          healBtn = usesLeft > 0
+            ? `<button class="healBtn" data-heal="${a.id}" title="Rest ${M.healH / 24} days in the medbay to heal ${M.healHp} HP of injuries.${capped} Uses 1 of ${usesLeft} treatments left.">🏥 Heal +${Math.round(amt)} HP (${M.healH / 24} days)</button>`
+            : '<span class="muted small">🏥 Medbay supplies used up</span>';
+        }
+        const hpL = a.hp < 25 ? 'bad' : a.hp < 50 ? 'warn' : 'ok';
+        const stL = a.stress >= A.stress.slowAt ? 'bad' : a.stress >= 50 ? 'warn' : 'ok';
+        const boL = a.bone < A.bone.groundedBelow ? 'bad' : a.bone < A.bone.injuryBelow ? 'warn' : 'ok';
+        return `<div class="amsRow${a.medbay ? ' gone' : ''}">
+          <div class="amsHead"><span class="amsId">${a.id}</span><b>${esc(a.name)}</b>${flags.join('')}</div>
+          <div class="amsWhere">${place(a)}</div>
+          ${a.medbay ? '' : hpBar(a, hpL)
+            + bar('😰 Stress', a.stress, stL, `Goes up when working alone outside and when caught in storms or meteor showers. At ${A.stress.slowAt}+ they work at half speed. A NEW Astronomy Tower lowers it.`)
+            + bar('🦴 Bones', a.bone, boL, `Bone density (%). Drops in Moon gravity; the Fitness Center builds it back. Below ${A.bone.injuryBelow}%: injuries. ${A.bone.groundedBelow}%: grounded. ${A.bone.fragileBelow}%: fragile (fractures). ${A.bone.severeBelow}%: severe. 0%: medbay for good.`)}
+          ${healBtn}
+        </div>`;
+      }).join('');
+      if (html !== lastAms) { $('ams').innerHTML = html; lastAms = html; }
     }
 
     function capcom(ev) {
@@ -179,10 +252,19 @@
           }
           else if (m.type === 'battery') lines.push(`Base battery: ${Math.round(state.res.battery)} / ${state.power.cap} kWh`);
           else if (m.type === 'shelter') lines.push(state.sheltering ? 'Crew is inside' : 'Empty. Use it during radiation storms.');
-          else if (m.type === 'tower') lines.push(MT.Sim.firstTower(state) === m ? "<i>Click to see today's picture from NASA</i>" : "<i>Click to see a picture from NASA's archive (since 1995)</i>");
-          else lines.push(!m.on ? 'Turned OFF by you' : m.powered ? `✅ Running (uses ${r1(MT.Sim.needOf(state, m))} kW)` : '⚡ NO POWER');
+          else if (m.type === 'tower') {
+            if (!m.damaged) lines.push(MT.Sim.firstTower(state) === m ? "<i>Click to see today's picture from NASA</i>" : "<i>Click to see a picture from NASA's archive (since 1995)</i>");
+            if (!m.viewed && !m.damaged) lines.push(`😌 First look lowers everyone's stress by ${C.astro.stress.towerRelief}!`);
+          } else lines.push(!m.on ? 'Turned OFF by you' : m.powered ? `✅ Running (uses ${r1(MT.Sim.needOf(state, m))} kW)` : '⚡ NO POWER');
+          if (m.type === 'gym') {
+            const who = state.crew.find((a) => a.where === 'gym' && a.gymId === m.id);
+            lines.push(who ? `🏋️ ${esc(who.name)} is training` : 'Empty right now');
+          }
           if (m.noWater) lines.push('💧 No water!');
-          if (m.type !== 'hab' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower') lines.push(`<i>Click to turn ${m.on ? 'OFF' : 'ON'}</i>`);
+          if (m.damaged) {
+            lines.push(m.type === 'gym' || m.type === 'tower' ? '🔧 DAMAGED: cannot be used' : '🔧 DAMAGED: works at half speed');
+            lines.push(m.repair ? `Repair in the work queue: ${Math.round((m.repair.progress / m.repair.work) * 100)}%` : `<i>Click to repair (${C.damage.repairCost} part, 1 astronaut goes outside)</i>`);
+          } else if (m.type !== 'hab' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower') lines.push(`<i>Click to turn ${m.on ? 'OFF' : 'ON'}</i>`);
         }
         html = `<b>${d.icon} ${esc(d.name)}</b><br>${esc(d.desc)}<br>${lines.join('<br>')}`;
       } else {
@@ -216,6 +298,8 @@
           <div>🫁 <b>Air</b>: the O₂ Generator turns water into oxygen. It needs power AND water.</div>
           <div>🍞 <b>Food</b>: greenhouses grow food but need lots of power.</div>
           <div>☢️ <b>Radiation</b>: solar flares can send radiation storms. Hide the crew in a shelter.</div>
+          <div>👩‍🚀 <b>Crew</b>: watch each astronaut's health, stress and bones in the AMS. One astronaut works on each job.</div>
+          <div>☄️ <b>Meteor showers</b> can hit astronauts outside and damage buildings. Click damaged buildings to repair them.</div>
         </div>
         <div class="choices">
           <button class="choice" data-s="training"><span class="big">🎓</span><b>Training mission</b><span>Random space weather. Every radiation storm is a copy of a real one NASA measured at the Moon.</span></button>
@@ -304,9 +388,9 @@
         ${chain}
         <h3>Mission charts</h3>
         <canvas id="debriefChart" width="640" height="170"></canvas>
-        <div class="legend"><span style="--c:#58c4ff">Oxygen</span><span style="--c:#ffb86b">Food</span><span style="--c:#7fa8ff">Water</span><span style="--c:#5fe08a">Battery</span><span style="--c:#ff5d5d">Radiation dose</span></div>
+        <div class="legend"><span style="--c:#58c4ff">Oxygen</span><span style="--c:#ffb86b">Food</span><span style="--c:#7fa8ff">Water</span><span style="--c:#5fe08a">Battery</span><span style="--c:#ff5d5d">Crew health (avg)</span></div>
         <div class="statGrid">
-          <div><b>${d.stats.days}</b>days</div><div><b>${d.stats.dose}</b>mSv dose</div><div><b>${d.stats.foodMade}</b>kg food grown</div>
+          <div><b>${d.stats.days}</b>days</div><div><b>${state.crew.filter((a) => !a.medbay).length}/${state.crew.length}</b>astronauts healthy</div><div><b>${d.stats.dose}</b>mSv per astronaut (avg)</div><div><b>${d.stats.foodMade}</b>kg food grown</div>
           <div><b>${d.stats.o2Made}</b>kg O₂ made</div><div><b>${d.stats.waterMined}</b>kg ice mined</div><div><b>${d.stats.solarKwh}</b>kWh solar</div>
         </div>
         ${d.tips.length ? '<h3>' + (d.won ? 'Score' : 'Try this next time') + '</h3><ul class="tips">' + d.tips.map((t) => `<li>${esc(t)}</li>`).join('') + '</ul>' : ''}
@@ -329,7 +413,7 @@
         g.stroke();
       };
       line(Hs.o2, C.caps.o2, '#58c4ff'); line(Hs.food, 150, '#ffb86b'); line(Hs.water, C.caps.water, '#7fa8ff');
-      line(Hs.battery, Math.max(1, ...Hs.battery), '#5fe08a'); line(Hs.dose, C.rad.limit, '#ff5d5d');
+      line(Hs.battery, Math.max(1, ...Hs.battery), '#5fe08a'); line(Hs.hp || [], 100, '#ff5d5d');
       g.fillStyle = '#8b93a1'; g.font = '10px system-ui';
       for (let d = 5; d < 30; d += 5) { const x = ((d * 24) / n) * W; g.fillStyle = '#8b93a1'; g.fillRect(x, H - 4, 1, 4); g.fillText('Day ' + d, x + 3, H - 3); }
       g.fillStyle = 'rgba(18,23,34,0.85)'; g.fillRect(0, 0, 300, 16); g.fillStyle = '#c9d1dc'; g.fillText('blue band = plain in shadow · red line = radiation storm', 6, 11);

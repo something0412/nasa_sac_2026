@@ -5,7 +5,7 @@
   'use strict';
   const MT = (root.MT = root.MT || {});
 
-  const POOL_SIZE = 300;
+  const POOL_SIZE = 420;
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
 
   function Renderer(canvas, forecastCanvas) {
@@ -221,6 +221,18 @@
           if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', cx, y + 7); }
           break;
         }
+        case 'gym': {
+          // Floor mat with a dumbbell. It bounces when someone is training.
+          const training = state.crew.some((a) => a.where === 'gym' && a.gymId === m.id);
+          ctx.fillStyle = '#2f3a4c'; ctx.beginPath(); ctx.roundRect(x + 5, y + 7, w - 10, h - 14, 6); ctx.fill();
+          ctx.strokeStyle = on && !m.damaged ? '#7fb4ff' : '#59636f'; ctx.lineWidth = 1.5; ctx.stroke();
+          const lift = training ? Math.abs(Math.sin(time * 4)) * 5 : 0;
+          ctx.translate(cx, cy + 2 - lift);
+          ctx.fillStyle = '#c9d3df'; ctx.fillRect(-9, -1.5, 18, 3);
+          ctx.fillStyle = training ? '#ffd36b' : '#8a93a3';
+          ctx.fillRect(-13, -6, 4, 12); ctx.fillRect(9, -6, 4, 12);
+          break;
+        }
         case 'tower': {
           // Square base, white observatory dome with an open slit, and a telescope that slowly sweeps the sky.
           ctx.fillStyle = '#4b5361'; ctx.fillRect(x + 9, cy + 2, w - 18, 14);
@@ -253,6 +265,38 @@
       } else if (m.noWater && blink) {
         ctx.font = '14px system-ui'; ctx.textAlign = 'center'; ctx.fillText('💧', x + w - 9, y + 14);
         ctx.strokeStyle = '#58c4ff'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      }
+
+      // Damage from storms or meteors: cracks + wrench. A planned repair shows its progress.
+      if (m.built && m.damaged) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(60,20,0,0.35)'; ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = 'rgba(255,170,90,0.9)'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x + 6, y + 9); ctx.lineTo(x + 15, y + 17); ctx.lineTo(x + 12, y + 24); ctx.lineTo(x + 21, y + 31);
+        ctx.moveTo(x + w - 7, y + h - 8); ctx.lineTo(x + w - 14, y + h - 15); ctx.stroke();
+        ctx.font = '13px system-ui'; ctx.textAlign = 'center';
+        if (!m.repair && blink) ctx.fillText('🔧', x + w - 9, y + 13);
+        if (m.repair) {
+          ctx.fillText('🔧', x + w - 9, y + 13);
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x + 4, y + h - 8, w - 8, 5);
+          ctx.fillStyle = '#ff9f45'; ctx.fillRect(x + 4, y + h - 8, (w - 8) * (m.repair.progress / m.repair.work), 5);
+        }
+        ctx.restore();
+      }
+    }
+
+    // ---------- meteor shower animation ----------
+    // Meteors streak in from one direction (a shower's "radiant"), flash where they land and kick up dust.
+    function spawnMeteors(dt) {
+      const want = 9 * dt; // ~9 meteors per real second across the view
+      let n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+      while (n-- > 0) {
+        const sp = 380 + Math.random() * 260;
+        const vx = -0.78 * sp, vy = 0.62 * sp; // from the upper right, falling down-left
+        const life = 0.55 + Math.random() * 0.9;
+        // land somewhere in (or just around) the view
+        const lx = cam.x - 40 + Math.random() * (VW + 80), ly = cam.y - 20 + Math.random() * (VH + 40);
+        spawn(3, lx - vx * life, ly - vy * life, vx, vy, life, Math.random() < 0.25 ? '#ffd6a0' : '#f2f6ff');
       }
     }
 
@@ -365,25 +409,34 @@
 
       for (const m of state.modules) drawModule(state, m, blink);
 
-      // astronauts
-      const job = MT.Sim.currentJob(state);
+      // astronauts: each one walks to where the AMS says they are (job site, gym, shelter or the habitat)
       const shelter = MT.Sim.built(state, 'shelter')[0];
-      const wOut = MT.Sim.workersOutside(state);
-      crew.forEach((a, i) => {
+      const jobs = MT.Sim.jobList(state);
+      const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
+      state.crew.forEach((A, i) => {
+        const a = crew[i] || (crew[i] = { x: 0, y: 0, init: false });
         let tx = hc.x + Math.cos(i * 1.57 + 0.8) * 9, ty = hc.y + Math.sin(i * 1.57 + 0.8) * 9;
-        if (state.sheltering && shelter) { const s = center(shelter); tx = s.x - 9 + i * 6; ty = s.y + 12; }
-        else if (i < wOut && job) {
-          const jc = job.kind === 'module' ? center(job.m) : { x: hc.x + Math.cos(time * 0.6 + i * 3) * 40, y: hc.y + Math.sin(time * 0.6 + i * 3) * 40 };
-          tx = jc.x + (i ? 10 : -10) + Math.sin(time * 3 + i) * 3; ty = jc.y + 14;
+        let visible = false;
+        if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + i * 6; ty = s.y + 12; visible = true; }
+        else if (A.where === 'gym') {
+          const g = state.modules.find((m) => m.id === A.gymId);
+          if (g) { const gc = center(g); tx = gc.x; ty = gc.y + 13; visible = true; }
+        } else if (A.where === 'outside') {
+          const j = jobs.find((x) => x.key === A.job);
+          const jc = j && j.m ? center(j.m) : { x: hc.x + Math.cos(time * 0.4 + i * 3) * 42, y: hc.y + Math.sin(time * 0.4 + i * 3) * 42 };
+          tx = jc.x + Math.sin(time * 3 + i) * 3; ty = jc.y + 15; visible = true;
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
         if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; } else { a.x = tx; a.y = ty; }
-        const outside = !(state.sheltering && shelter) && i < wOut;
-        if (!outside && !(state.sheltering && shelter) && d < 1) return; // inside the habitat: hidden
+        if (A.medbay || (!visible && d < 1)) return; // inside the habitat (or medbay): hidden
+        const outside = A.where === 'outside';
         ctx.beginPath(); ctx.arc(a.x, a.y, 4.5, 0, Math.PI * 2);
-        ctx.fillStyle = outside && state.stormRate > C.rad.stormOn && blink ? '#ff5d5d' : '#ffffff'; ctx.fill();
+        ctx.fillStyle = outside && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
         ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
+        // number tag so you can match the astronaut to the AMS list
+        ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
+        ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), a.x, a.y - 9.5);
       });
 
       // radiation storm particles stream in from the Sun's direction, across what the camera sees
@@ -398,14 +451,36 @@
           spawn(0, sx, sy, -sv.x * sp, -sv.y * sp, 2.2, Math.random() < 0.5 ? 'rgba(255,90,90,0.7)' : 'rgba(255,220,120,0.7)');
         }
       }
+      if (state.meteorOn) spawnMeteors(dt);
       for (const p of pool) {
         if (!p.alive) continue;
         p.life += dt;
-        if (p.life >= p.max) { p.alive = false; continue; }
+        if (p.life >= p.max) {
+          p.alive = false;
+          if (p.kind === 3) { // meteor lands: flash ring + a puff of moon dust
+            spawn(4, p.x, p.y, 0, 0, 0.55, p.color);
+            for (let k = 0; k < 5; k++) spawn(1, p.x, p.y, (Math.random() - 0.5) * 60, -Math.random() * 40, 0.7, 'rgba(200,200,205,0.8)');
+          }
+          continue;
+        }
         p.x += p.vx * dt; p.y += p.vy * dt;
         if (p.kind === 0) {
           ctx.strokeStyle = p.color; ctx.lineWidth = 1.5;
           ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.03, p.y - p.vy * 0.03); ctx.stroke();
+        } else if (p.kind === 3) { // meteor: bright head with a fading tail
+          const tx = p.x - p.vx * 0.12, ty = p.y - p.vy * 0.12;
+          const grad = ctx.createLinearGradient(p.x, p.y, tx, ty);
+          grad.addColorStop(0, p.color); grad.addColorStop(1, 'rgba(255,255,255,0)');
+          ctx.strokeStyle = grad; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tx, ty); ctx.stroke(); ctx.lineCap = 'butt';
+          ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2); ctx.fill();
+        } else if (p.kind === 4) { // impact flash
+          const t = p.life / p.max;
+          ctx.globalAlpha = 1 - t;
+          ctx.strokeStyle = '#ffe2b0'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(p.x, p.y, 3 + t * 16, 0, Math.PI * 2); ctx.stroke();
+          if (t < 0.25) { ctx.fillStyle = '#fff6e0'; ctx.beginPath(); ctx.arc(p.x, p.y, 5 * (1 - t * 4), 0, Math.PI * 2); ctx.fill(); }
+          ctx.globalAlpha = 1;
         } else {
           ctx.globalAlpha = 1 - p.life / p.max;
           ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.kind === 1 ? 2 : 1.6, 0, Math.PI * 2); ctx.fill();
@@ -434,6 +509,7 @@
       // screen-space overlays
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       if (state.stormRate > C.rad.stormOn) { ctx.fillStyle = `rgba(255,40,40,${Math.min(0.14, state.stormRate * 0.01)})`; ctx.fillRect(0, 0, VW, VH); }
+      if (state.meteorOn) { ctx.fillStyle = 'rgba(40,20,70,0.12)'; ctx.fillRect(0, 0, VW, VH); }
       drawBaseTag(hc);
     }
 
@@ -465,6 +541,10 @@
       for (const s of state.storms) if (s.warned) {
         const x = left + (s.h / total) * w;
         fctx.fillStyle = '#ff5d5d'; fctx.fillRect(x - 1, top, 2, rowsBottom - top);
+      }
+      for (const s of state.meteors || []) if (s.warned) { // meteor showers: purple band once forecast
+        fctx.fillStyle = 'rgba(190,140,255,0.85)';
+        fctx.fillRect(left + (s.h / total) * w, top, Math.max(2, (s.dur / total) * w), rowsBottom - top);
       }
       const nx = left + (state.hour / total) * w;
       fctx.fillStyle = '#ffffff';

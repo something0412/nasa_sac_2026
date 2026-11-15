@@ -146,7 +146,6 @@ html, body { height: 100%; overflow: hidden; }
 .modalBox .bad { color: var(--bad); }
 .modalBox .warn { color: var(--warn); }
 .lead { font-size: 15px; }
-.briefingDialogue { display: block; width: 100%; min-height: 160px; padding: 18px; text-align: left; font-size: 16px; line-height: 1.6; }
 /* Astronomy Tower pop-up (js/apod.js) */
 .modalBox.wide { max-width: 920px; }
 .apodHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

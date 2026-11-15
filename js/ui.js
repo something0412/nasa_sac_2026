@@ -454,7 +454,7 @@
     function showStart(onChoose) {
       modal(`
         <h1>🌙 Zain Base</h1>
-        <p class="lead"><b>Mission objective</b> — Establish Zain Base and protect your first <b>4 astronauts</b> through <b>30 days</b>. Maintain life support, manage supplies, and keep the base running for <b>as many days as you can</b>. It only closes when no astronaut is left on the Moon.</p>
+        <p class="lead">You are the commander of a Moon base near the lunar south pole, where NASA's Artemis astronauts plan to go. Keep the base running for <b>as many days as you can</b>. It only closes when no astronaut is left on the Moon.</p>
         <div class="howto">
           <div>☀️ <b>Power</b>: the Sun circles the horizon here. Hills block it, so shadows move. Panels in shadow make nothing.</div>
           <div>🫁 <b>Air</b>: the O₂ Generator turns water into oxygen. It needs power AND water.</div>
@@ -468,69 +468,7 @@
           <button class="choice" data-s="training"><span class="big">🎓</span><b>Training mission</b><span>Random space weather. Every radiation storm is a copy of a real one NASA measured at the Moon.</span></button>
           <button class="choice real" data-s="history"><span class="big">📡</span><b>Real history: May 2024</b><span>Replay the real solar storms of May 2024 (biggest in 20 years): NASA DONKI alerts and the radiation NASA's LRO measured at the Moon, hour by hour.</span></button>
         </div>`);
-      $('modalBody').querySelectorAll('.choice').forEach((b) => b.addEventListener('click', () => {
-        const begin = () => { closeModal(); onChoose(b.dataset.s); };
-        if (b.dataset.s === 'training') showBriefing(begin);
-        else begin();
-      }));
-    }
-
-    function showBriefing(onDone) {
-      const lines = [
-        "Zain Base, this is Houston. We're receiving your signal loud and clear. Welcome to the lunar south pole, Commander.",
-        "Through Artemis, we're learning how people can explore the Moon and live farther from Earth. Your first milestone is to establish a working outpost and demonstrate that your crew can operate here for 30 days. Then keep the base running and prepare for more astronauts to arrive.",
-        "You have four astronauts, a habitat, and limited supplies. You'll need to generate electricity, maintain breathable air, secure water and food, and protect your team from the hazards of the lunar surface.",
-        "We'll send updates from Houston, but you're commanding this base. Your goal is to bring the entire crew through safely. Houston is standing by, Commander. You have the base.",
-      ];
-      modal(`
-        <h1>NASA Mission Control · CAPCOM</h1>
-        <p class="muted small">Fictional mission dialogue · Mission paused</p>
-        <button type="button" id="briefingDialogue" class="briefingDialogue">
-          <span id="briefingText" aria-hidden="true"></span>
-        </button>
-        <p id="briefingHint" class="muted small"></p>
-        <div class="row"><button type="button" id="briefingNext" class="primary">Show full message</button></div>`);
-      const dialogue = $('briefingDialogue'), text = $('briefingText');
-      const next = $('briefingNext'), hint = $('briefingHint');
-      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const characterMs = 25;
-      let line = 0, visible = 0, timer = null;
-
-      function finishLine() {
-        clearTimeout(timer);
-        timer = null;
-        text.textContent = lines[line];
-        next.textContent = line === lines.length - 1 ? 'Begin mission' : 'Continue';
-        hint.textContent = 'Click the message or button to continue. Enter and Space also work when focused.';
-      }
-
-      function typeCharacter() {
-        visible++;
-        text.textContent = lines[line].slice(0, visible);
-        if (visible >= lines[line].length) finishLine();
-        else timer = setTimeout(typeCharacter, characterMs);
-      }
-
-      function showLine() {
-        visible = 0;
-        dialogue.setAttribute('aria-label', lines[line]);
-        text.textContent = '';
-        next.textContent = 'Show full message';
-        hint.textContent = 'Click the message or button to reveal the full message.';
-        if (reducedMotion) finishLine();
-        else timer = setTimeout(typeCharacter, characterMs);
-      }
-
-      function advance() {
-        if (timer !== null) { finishLine(); return; }
-        line++;
-        if (line === lines.length) onDone();
-        else showLine();
-      }
-
-      dialogue.addEventListener('click', advance);
-      next.addEventListener('click', advance);
-      showLine();
+      $('modalBody').querySelectorAll('.choice').forEach((b) => b.addEventListener('click', () => { closeModal(); onChoose(b.dataset.s); }));
     }
 
     // ----- Astronomy Tower: NASA picture of the day under a fishbowl lens (js/apod.js) -----

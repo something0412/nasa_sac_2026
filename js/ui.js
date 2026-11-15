@@ -296,8 +296,9 @@
         }).join('')
         : '<div class="cd info"><span class="cdIco">✅</span><span class="cdText">Nothing incoming right now.</span></div>';
       if (html !== lastBar) { $('countdowns').innerHTML = html; lastBar = html; }
+    }
 
-    return { update, capcom, setSpeed, tooltip, showStart, showEvent, showDebrief, showTower, isModalOpen, select, get selected() { return selected; } };
+    return { live, update, capcom, setSpeed, tooltip, showStart, showEvent, showDebrief, showTower, isModalOpen, select, get selected() { return selected; } };
   }
 
   MT.UI = UI;

@@ -221,6 +221,20 @@
           if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', cx, y + 7); }
           break;
         }
+        case 'tower': {
+          // Square base, white observatory dome with an open slit, and a telescope that slowly sweeps the sky.
+          ctx.fillStyle = '#4b5361'; ctx.fillRect(x + 9, cy + 2, w - 18, 14);
+          ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 9, cy + 2, w - 18, 14);
+          ctx.fillStyle = '#e4e8ee'; ctx.beginPath(); ctx.arc(cx, cy + 2, 12, Math.PI, 0); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = '#9aa2af'; ctx.stroke();
+          const sweep = m.built ? Math.sin(time * 0.6 + m.id) * 0.5 : 0;
+          ctx.save(); ctx.translate(cx, cy - 2); ctx.rotate(sweep);
+          ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
+          ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
+          ctx.restore();
+          if (m.built && blink) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); }
+          break;
+        }
       }
       ctx.restore();
 
@@ -232,7 +246,7 @@
       } else if (!m.on) {
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y, w, h);
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', x + w / 2, y + h / 2 + 4);
-      } else if (m.type !== 'solar' && m.type !== 'battery' && m.type !== 'shelter' && !m.powered) {
+      } else if (m.type !== 'solar' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower' && !m.powered) {
         ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fillRect(x, y, w, h);
         if (blink) { ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillText('⚡', x + w - 9, y + 15); }
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
@@ -368,12 +382,12 @@
         const outside = !(state.sheltering && shelter) && i < wOut;
         if (!outside && !(state.sheltering && shelter) && d < 1) return; // inside the habitat: hidden
         ctx.beginPath(); ctx.arc(a.x, a.y, 4.5, 0, Math.PI * 2);
-        ctx.fillStyle = outside && state.stormRate > 0.3 && blink ? '#ff5d5d' : '#ffffff'; ctx.fill();
+        ctx.fillStyle = outside && state.stormRate > C.rad.stormOn && blink ? '#ff5d5d' : '#ffffff'; ctx.fill();
         ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
       });
 
       // radiation storm particles stream in from the Sun's direction, across what the camera sees
-      if (state.stormRate > 0.3) {
+      if (state.stormRate > C.rad.stormOn) {
         const n = Math.min(6, state.stormRate * 0.6 + 0.5);
         const vx = cam.x + VW / 2, vy = cam.y + VH / 2;
         for (let k = 0; k < n; k++) {
@@ -419,7 +433,7 @@
 
       // screen-space overlays
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      if (state.stormRate > 0.3) { ctx.fillStyle = `rgba(255,40,40,${Math.min(0.14, state.stormRate * 0.01)})`; ctx.fillRect(0, 0, VW, VH); }
+      if (state.stormRate > C.rad.stormOn) { ctx.fillStyle = `rgba(255,40,40,${Math.min(0.14, state.stormRate * 0.01)})`; ctx.fillRect(0, 0, VW, VH); }
       drawBaseTag(hc);
     }
 

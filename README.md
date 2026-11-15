@@ -11,7 +11,7 @@ python -m http.server 8137
 
 Open http://localhost:8137. (Double-clicking `index.html` also works: no build step, no internet.)
 
-Controls: click a build button (or keys 1-6), then click the map. Click a module to turn it ON/OFF.
+Controls: click a build button (or keys 1-7), then click the map. Click a module to turn it ON/OFF.
 Click a module that is still being built to cancel it. Space = pause. Esc / right-click = stop building.
 Drag the map to look around (the world is 80 x 56 tiles, the view shows 20 x 14). If the base is off-screen,
 a 🏠 BASE tag on the edge points the way; click it or press H to fly back.
@@ -43,13 +43,15 @@ js/config.js        ALL game numbers, with sources (REAL vs GAME-tuned)
 js/sim.js           the rules (no drawing): one step() = one game hour
 js/render.js        map drawing at 60 fps (offscreen ground, particle pool)
 js/ui.js            side panel, pop-ups, debrief
+js/apod.js          Astronomy Tower: NASA picture of the day under a fishbowl lens (needs internet)
 js/main.js          game loop: fixed 1-hour sim tick, separate from drawing
 data/may2024.js     GENERATED from NASA DONKI by tools/build_may2024.py
+data/radlab.js      GENERATED from NASA RadLab (LRO CRaTER radiation) by tools/build_radlab.py
 tests/sim.test.js   plays whole missions with bots to check balance
 ```
 
 Tests: `node --test tests/sim.test.js` (from the project root).
-Refresh the data: `python tools/build_may2024.py [YOUR_API_KEY]`.
+Refresh the data: `python tools/build_may2024.py [YOUR_API_KEY]` and `python tools/build_radlab.py` (no key needed).
 
 ## Data and sources
 
@@ -58,4 +60,11 @@ Refresh the data: `python tools/build_may2024.py [YOUR_API_KEY]`.
 - 30-day crew limit 250 mGy-Eq: NASA-STD-3001.
 - O₂ 0.84 kg and food ~1.8 kg per person per day: NASA BVAD (NASA/TP-2015-218570).
 - Polar illumination idea: LRO LOLA illumination studies (Mazarico et al. 2011).
-- Storm doses, module power and production rates are game-tuned (marked GAME in `js/config.js`).
+- Storm radiation: real hourly dose measured at the Moon by NASA's Lunar Reconnaissance Orbiter (CRaTER),
+  from the [NASA OSDR RadLab API](https://visualization.osdr.nasa.gov/radlab/gui/data-api/). The May 2024 mission
+  replays every hour of May 2024; training missions copy real storms (Jan 2012, Mar 2012, Sep 2017, May 2024, Oct 2021).
+  Orbit-to-surface conversion: ×0.75 for the sky the Moon blocks (approximate) and ×1.5 for protons (NASA-STD-3001 RBE).
+- Astronomy Tower pictures: NASA Astronomy Picture of the Day, live from the APOD Basic JSON feed
+  (`science.nasa.gov/wp-json/wp/v2/apod-basic`, no key). The newest image post is shown; video days are skipped.
+  This is the only feature that needs internet; it falls back to the last picture received.
+- Shielding fractions, module power and production rates are game-tuned (marked GAME in `js/config.js`).

@@ -41,7 +41,7 @@
   };
 
   // How tall each building is (height units). Used for shadows and for where status badges go.
-  const HEIGHT = { hab: 1.35, solar: 1.8, battery: 0.6, o2gen: 0.9, greenhouse: 0.5, drill: 1.5, shelter: 0.65, gym: 0.75, tower: 1.15 };
+  const HEIGHT = { hab: 1.35, solar: 1.8, battery: 0.6, o2gen: 0.9, greenhouse: 0.5, drill: 1.5, shelter: 0.65, gym: 0.75, tower: 1.15, lab: 0.95 };
   const height = (type) => HEIGHT[type] || 0.6;
 
   // ---------- light ----------
@@ -542,7 +542,55 @@
       // railing around the front of the walkway
       for (let i = 0; i <= 6; i++) { const t = FRONT_FROM + ((FRONT_TO - FRONT_FROM) * i) / 6; k.line3([cc + 0.4 * Math.cos(t), rc + 0.4 * Math.sin(t), zb], [cc + 0.4 * Math.cos(t), rc + 0.4 * Math.sin(t), zb + 0.13], PALETTE.metal, 1); }
       k.ringZ(cc, rc, zb + 0.13, 0.4, PALETTE.metal, 1.2);
-      if (m.built && e.blink) k.glow(cc + 0.32, rc - 0.2, zb + 0.15, 'rgba(127,180,255,0.9)', 3);
+      // blue light = the tower is ready for an astronaut to use again
+      const ready = !(MT.Sim && MT.Sim.towerReadyIn) || !MT.Sim.towerReadyIn(e.state, m);
+      if (m.built && e.blink && ready) k.glow(cc + 0.32, rc - 0.2, zb + 0.15, 'rgba(127,180,255,0.9)', 3);
+    },
+
+    // RESEARCH BAY: a white lab module with a porthole, a sample hatch and a big glass flask on the roof that
+    // glows and bubbles while the Scientist is researching upgrades. A dish antenna sends results to Earth.
+    lab(k, m, e) {
+      const ctx = k.ctx, c0 = m.c + 0.14, r0 = m.r + 0.18, dc = 0.72, dr = 0.62, z0 = 0.04, h = 0.42, zt = z0 + h;
+      const busy = (e.state.crew || []).some((a) => !a.medbay && a.task && a.task.kind === 'lab' && a.task.id === m.id);
+      const glowOn = busy && m.built && !m.damaged;
+      k.box(c0 - 0.04, r0 - 0.04, 0, dc + 0.08, dr + 0.08, z0, PALETTE.trim); // base plinth
+      // dish antenna at the back corner
+      k.line3([c0 + 0.12, r0 + 0.1, zt], [c0 + 0.12, r0 + 0.1, zt + 0.42], PALETTE.metal, 1.4);
+      const dp = k.P3(c0 + 0.12, r0 + 0.1, zt + 0.42);
+      ctx.fillStyle = '#f4f6f9'; ctx.beginPath(); ctx.ellipse(dp.x + 2, dp.y, 6, 3.4, -0.7, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = PALETTE.outline; ctx.lineWidth = 1; ctx.stroke();
+      k.box(c0, r0, z0, dc, dr, h, PALETTE.hull);
+      for (const a of [c0, c0 + dc - 0.045]) k.decal('r', r0 + dr + 0.002, a, a + 0.045, z0, zt, PALETTE.trim); // corner posts
+      k.decal('r', r0 + dr + 0.003, c0 + 0.045, c0 + dc - 0.045, zt - 0.07, zt - 0.035, '#5fb8e8'); // science-blue stripe
+      // porthole on the front: cyan light inside while research is running
+      const pw = k.P3(c0 + dc * 0.35, r0 + dr + 0.004, 0.24);
+      ctx.fillStyle = PALETTE.trim; ctx.beginPath(); ctx.ellipse(pw.x, pw.y, 6.4, 6.8, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = glowOn ? '#8fe3ff' : PALETTE.glassDark; ctx.beginPath(); ctx.ellipse(pw.x, pw.y, 4.8, 5.2, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = PALETTE.outline; ctx.lineWidth = 1; ctx.stroke();
+      if (glowOn) k.glow(c0 + dc * 0.35, r0 + dr + 0.1, 0.24, 'rgba(111,211,255,0.35)', 14);
+      // microscope sign beside the porthole
+      const sg = k.P3(c0 + dc * 0.72, r0 + dr + 0.004, 0.27);
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.roundRect(sg.x - 3.5, sg.y - 3.5, 7, 7, 1.5); ctx.fill();
+      ctx.strokeStyle = '#2f7fd0'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(sg.x - 1, sg.y - 2.5); ctx.lineTo(sg.x + 1, sg.y + 1); ctx.moveTo(sg.x - 2.5, sg.y + 2.2); ctx.lineTo(sg.x + 2.5, sg.y + 2.2); ctx.stroke();
+      // side: door, sample hatch with an orange handle, and a light
+      k.decal('c', c0 + dc + 0.003, r0 + 0.08, r0 + 0.28, z0, 0.36, '#3b424e');
+      k.decal('c', c0 + dc + 0.003, r0 + 0.36, r0 + 0.54, 0.14, 0.28, PALETTE.trim);
+      k.decal('c', c0 + dc + 0.004, r0 + 0.41, r0 + 0.49, 0.2, 0.22, PALETTE.accent);
+      k.dot(c0 + dc + 0.004, r0 + 0.18, 0.4, glowOn ? PALETTE.ok : m.built ? '#7f8b99' : '#555', 1.6);
+      // roof: lip, then the glass flask (the "big beaker" you can see from far away)
+      k.box(c0 - 0.03, r0 - 0.03, zt, dc + 0.06, dr + 0.06, 0.03, PALETTE.trim);
+      const fc = c0 + dc * 0.6, fr = r0 + dr * 0.45, fz = zt + 0.03;
+      k.cylZ(fc, fr, fz, 0.03, 0.16, PALETTE.metal, { noOutline: true }); // stand
+      const b = k.P3(fc, fr, fz + 0.03);
+      const pts = [[-2.2, -15], [2.2, -15], [2.2, -9], [7, 0], [-7, 0], [-2.2, -9]];
+      ctx.beginPath(); pts.forEach(([dx, dy], i) => (i ? ctx.lineTo(b.x + dx, b.y + dy) : ctx.moveTo(b.x + dx, b.y + dy))); ctx.closePath();
+      ctx.fillStyle = 'rgba(220,235,245,0.45)'; ctx.fill(); ctx.strokeStyle = 'rgba(238,241,245,0.9)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(b.x - 5, b.y - 3); ctx.lineTo(b.x + 5, b.y - 3); ctx.lineTo(b.x + 6.4, b.y - 0.5); ctx.lineTo(b.x - 6.4, b.y - 0.5); ctx.closePath();
+      ctx.fillStyle = glowOn ? '#6fd3ff' : '#4d5868'; ctx.fill(); // liquid
+      if (glowOn) {
+        k.glow(fc, fr, fz + 0.2, 'rgba(111,211,255,0.4)', 12);
+        if (Math.random() < 0.12) e.spawn(2, b.x + (Math.random() - 0.5) * 4, b.y - 15, 0, -14, 1, '#bdf0ff');
+      }
     },
 
     // FITNESS CENTER: a small white module with a big window. Inside: a treadmill, an exercise bike and weights.

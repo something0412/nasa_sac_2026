@@ -27,7 +27,7 @@
     const ctx = canvas.getContext('2d');
 
     let ground = null, zoneGrid = null;
-    const crew = [];
+    let crew = {}; // astronaut id -> where they stand (grid squares) and where they were drawn (for clicks)
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
     let time = 0, dashOffset = 0, frac = 0;
@@ -178,8 +178,7 @@
         g.fillText(f.label, p.x, p.y);
       }
       ground = off;
-      crew.length = 0;
-      for (let i = 0; i < C.crew; i++) crew.push({ c: 0, r: 0, init: false });
+      crew = {};
     }
 
     // ---------- particles (object pool, no new objects per frame) ----------
@@ -234,7 +233,6 @@
       };
       let by = ctr.y - ht - 10; // badges stack upward above the building
       const badge = (text, color) => { Models.badge(ctx, ctr.x, by, text, color); by -= 18; };
-      const needsPower = (C.modules[m.type].power || 0) > 0;
       ctx.save();
       if (!m.built) {
         const fr = m.progress / C.modules[m.type].work;
@@ -242,7 +240,7 @@
         bar(fr, '#ffd36b');
       } else if (!m.on) {
         badge('OFF', '#a7b0bf');
-      } else if (needsPower && !m.powered) {
+      } else if (MT.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
         poly(f); ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke(); // red ring on the ground
         if (blink) badge('⚡ NO POWER', '#ff5d5d'); else by -= 18;
       } else if (m.noWater) {
@@ -262,18 +260,40 @@
         if (m.repair) { bar(m.repair.progress / m.repair.work, '#ff9f45'); badge('🔧 FIXING', '#ff9f45'); }
         else if (blink) badge('🔧 BROKEN', '#ff9f45');
       }
+      // Moondust on a solar panel (accident): brown footprint with speckles.
+      if (m.built && m.type === 'solar' && m.dustLeft > 0) {
+        poly(f); ctx.fillStyle = 'rgba(140,110,70,0.45)'; ctx.fill();
+        ctx.fillStyle = 'rgba(190,160,110,0.9)';
+        for (let i = 0; i < 9; i++) { const p = P(m.c + 0.15 + ((i * 0.37 + m.id * 0.11) % 0.7), m.r + 0.15 + ((i * 0.23 + m.id * 0.07) % 0.7)); ctx.fillRect(p.x, p.y, 2, 2); }
+      }
+      // Research boost: "1.5x" / "2x" badge above machines close enough to a Research Bay.
+      if (m.built && C.research.targets.includes(m.type)) {
+        const b = MT.Sim.boostOf(state, m);
+        if (b > 1) {
+          const x = ctr.x - HW * 0.5, y = ctr.y - ht - 10;
+          ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x - 10, y - 8, 20, 11, 3); ctx.fill();
+          ctx.fillStyle = '#6fd3ff'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(b + 'x', x, y + 0.5);
+        }
+      }
       ctx.restore();
     }
 
     // ---------- astronauts ----------
-    function drawAstronaut(A, a, outside, danger, blink) {
+    function drawAstronaut(A, a, exposed, danger, blink, sel) {
       const p = P(a.c, a.r);
+      a.x = p.x; a.y = p.y; // remembered for clicks (crewAt)
       ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 5, 2.5, 0, 0, Math.PI * 2); ctx.fill();
-      const body = outside && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
+      if (sel) { // picked: pulsing gold ring on the ground
+        const k = 1 + Math.sin(time * 5) * 0.15;
+        ctx.beginPath(); ctx.ellipse(p.x, p.y, 11 * k, 5.5 * k, 0, 0, Math.PI * 2); ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
+      }
+      const body = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
       ctx.fillStyle = body; ctx.beginPath(); ctx.roundRect(p.x - 3.5, p.y - 10, 7, 9, 3); ctx.fill(); // suit
       ctx.beginPath(); ctx.arc(p.x, p.y - 12.5, 4, 0, Math.PI * 2); ctx.fill(); // helmet
       ctx.beginPath(); ctx.arc(p.x + 1.2, p.y - 13, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill(); // visor
+      // number tag (border = role colour) so you can match the astronaut to the AMS list
       ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(p.x - 6, p.y - 29, 12, 10, 3); ctx.fill();
+      ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
       ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), p.x, p.y - 21.5);
     }
 
@@ -399,10 +419,10 @@
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
-        } else if (m.type === 'shelter') { color = '#6b5b45'; }
+        } else if (m.type === 'shelter' || !MT.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
         else { color = !m.on ? '#4a4f5a' : m.powered ? '#ffd36b' : '#ff5d5d'; flow = m.on && m.powered ? -1 : 0; }
         ctx.strokeStyle = color;
-        ctx.setLineDash(flow ? [6, 6] : m.type === 'shelter' ? [2, 4] : [3, 5]);
+        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
       }
@@ -422,21 +442,50 @@
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
 
+      // Research Bay reach (dashed ring on the ground): while placing one, hovering one, or with the Scientist
+      // picked. A circle of R squares on the grid is an ellipse √2·R·HW wide and √2·R·HH tall on screen.
+      const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
+      const hoverM = ui.hover && !ui.buildType && Iso.inMap(ui.hover.c, ui.hover.r, COLS, ROWS) ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
+      const rings = [];
+      if (ui.buildType === 'lab' && ui.hover) rings.push({ ...P(ui.hover.c + 0.5, ui.hover.r + 0.5) });
+      for (const l of MT.Sim.built(state, 'lab')) {
+        if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...mid(l), dead: l.damaged });
+      }
+      for (const g of rings) {
+        const R = C.research.radius * Math.SQRT2;
+        ctx.beginPath(); ctx.ellipse(g.x, g.y, R * HW, R * HH, 0, 0, Math.PI * 2);
+        ctx.fillStyle = g.dead ? 'rgba(255,93,93,0.04)' : 'rgba(111,211,255,0.06)'; ctx.fill();
+        ctx.setLineDash([8, 6]); ctx.lineDashOffset = dashOffset * 0.5;
+        ctx.strokeStyle = g.dead ? 'rgba(255,93,93,0.6)' : 'rgba(111,211,255,0.75)'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.setLineDash([]); ctx.lineDashOffset = 0;
+      }
+      // The picked Engineer's job sites get a dashed outline in their role colour.
+      const jobs = MT.Sim.jobList(state);
+      if (picked) {
+        ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+        for (const j of jobs) if (j.assignee === picked.id) { const m = j.m || habM; poly(footprint(m.c, m.r, m.w, m.h, -0.06)); ctx.stroke(); }
+        ctx.setLineDash([]);
+      }
+
       // Astronauts: work out where each one is (in grid squares), walking toward where the AMS says they are.
       const shelter = MT.Sim.built(state, 'shelter')[0];
-      const jobs = MT.Sim.jobList(state);
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       const hcg = { c: habM.c + habM.w / 2, r: habM.r + habM.h / 2 };
       const gmid = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
       const people = [];
-      state.crew.forEach((A, i) => {
-        const a = crew[i] || (crew[i] = { c: 0, r: 0, init: false });
+      for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
+      state.crew.forEach((A) => {
+        const i = A.id - 1; // keyed by id, so someone leaving never moves the others' spots
+        const a = crew[A.id] || (crew[A.id] = { c: 0, r: 0, init: false });
         let tc = hcg.c + Math.cos(i * 1.57 + 0.8) * 0.22, tr = hcg.r + Math.sin(i * 1.57 + 0.8) * 0.22;
         let visible = false;
         if (A.where === 'shelter' && shelter) { const s = gmid(shelter); tc = s.c - 0.2 + i * 0.15; tr = s.r + 0.4; visible = true; }
         else if (A.where === 'gym') {
           const g = state.modules.find((m) => m.id === A.gymId);
           if (g) { const gc = gmid(g); tc = gc.c + 0.3; tr = gc.r + 0.3; visible = true; }
+        } else if (A.task && A.where === A.task.kind) { // Research Bay, greenhouse or Astronomy Tower
+          const tm = state.modules.find((m) => m.id === A.task.id);
+          if (tm) { const g = gmid(tm); tc = g.c + 0.38 + Math.sin(time * 1.5 + i) * 0.04; tr = g.r + 0.38; visible = true; }
         } else if (A.where === 'outside') {
           const j = jobs.find((x) => x.key === A.job);
           const jc = j && j.m ? gmid(j.m) : { c: hcg.c + Math.cos(time * 0.4 + i * 3) * 1.05, r: hcg.r + Math.sin(time * 0.4 + i * 3) * 1.05 };
@@ -445,8 +494,11 @@
         if (!a.init) { a.c = tc; a.r = tr; a.init = true; }
         const dc = tc - a.c, dr = tr - a.r, d = Math.hypot(dc, dr), sp = (140 / 40) * dt; // same walking speed as the top-down map
         if (d > sp) { a.c += (dc / d) * sp; a.r += (dr / d) * sp; } else { a.c = tc; a.r = tr; }
-        if (A.medbay || (!visible && d * PX_PER_TILE < 1)) return; // inside the habitat (or medbay): hidden
-        people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, A.where === 'outside', danger, blink) });
+        const sel = picked === A;
+        a.id = A.id;
+        a.shown = !A.medbay && (visible || d * PX_PER_TILE >= 1 || sel); // the picked astronaut is always shown, even inside
+        if (!a.shown) return; // inside the habitat (or medbay): hidden
+        people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, MT.Sim.isExposed(A), danger, blink, sel) });
       });
 
       // Draw buildings and people from the back of the map to the front, so nearer things cover farther ones.
@@ -539,9 +591,21 @@
     }
 
     function reset() { ground = null; tagRect = null; zoom = 1; for (const p of pool) p.alive = false; }
+    /** The astronaut drawn under the mouse (id), or null. Checks the body and the number tag above it. */
+    function crewAt(evt) {
+      const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels
+      let best = null, bd = 12;
+      for (const a of Object.values(crew)) {
+        if (!a.shown || a.x == null) continue;
+        const d = Math.min(Math.hypot(a.x - wx, a.y - 8 - wy), Math.hypot(a.x - wx, a.y - 24 - wy));
+        if (d < bd) { bd = d; best = a.id; }
+      }
+      return best;
+    }
 
     return {
-      draw, tileAt, toCanvas, hitTag, reset, centerOnBase, resize, setSafeArea, zoomAt,
+      draw, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, resize, setSafeArea, zoomAt,
+
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
       panTo: (x, y) => moveTo(x, y),

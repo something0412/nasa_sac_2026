@@ -5,7 +5,7 @@
   const MT = (root.MT = root.MT || {});
 
   MT.CONFIG = {
-    missionHours: 720, // 30 days # hello 
+    missionHours: 720, // 30 days
     crew: 4,
     // Every job (new building, repair, moon-dirt shield) gets exactly ONE astronaut. At most this many
     // astronauts work outside at the same time; the rest stay in the habitat.

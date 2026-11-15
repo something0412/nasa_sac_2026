@@ -6,6 +6,7 @@ const path = require('node:path');
 
 globalThis.window = globalThis;
 require(path.join(__dirname, '../data/may2024.js'));
+require(path.join(__dirname, '../data/radlab.js'));
 require(path.join(__dirname, '../js/config.js'));
 require(path.join(__dirname, '../js/sim.js'));
 const S = globalThis.MT.Sim;
@@ -28,7 +29,7 @@ const goodSetup = (st) => {
 };
 const shelterBot = (st, ev) => {
   for (const e of ev) if (e.decision === 'shelter') S.setShelter(st, true);
-  if (st.sheltering && st.stormRate < 0.3 && !st.storms.some((s) => s.h > st.hour - 3 && s.h < st.hour + 3)) S.setShelter(st, false);
+  if (st.sheltering && st.stormRate < globalThis.MT.CONFIG.rad.stormOn && !st.storms.some((s) => s.h > st.hour - 3 && s.h < st.hour + 3)) S.setShelter(st, false);
 };
 
 test('real May 2024 data is loaded and lines up with the mission', () => {
@@ -62,9 +63,32 @@ test('the shelter cuts storm radiation a lot', () => {
   assert.ok(exposed > sheltered * 3, `exposed ${exposed} vs sheltered ${sheltered}`);
 });
 
-test('working outside during the strong storm is dangerous', () => {
-  const st = play('history', 1, goodSetup, (s) => { if (s.hour === 238) S.startBerm(s); });
-  assert.ok(st.doseFrom.outside > 60, 'outside dose ' + st.doseFrom.outside);
+test('May 2024 storm radiation is the real LRO measurement, hour by hour', () => {
+  const st = S.create({ scenario: 'history', seed: 1 });
+  assert.ok(st.radCurve && st.radCurve.length >= 720, 'RadLab curve loaded');
+  const peakHour = st.radCurve.slice(0, 720).reduce((best, v, i, a) => (v > a[best] ? i : best), 0);
+  assert.strictEqual(Math.floor(peakHour / 24) + 1, 14, 'LRO saw the highest dose rate on 14 May 2024');
+  // Real May 2024 was survivable even without the shelter, but the shelter still cuts the dose.
+  const ignored = play('history', 1, goodSetup);
+  assert.strictEqual(ignored.status, 'won');
+  assert.ok(ignored.dose < globalThis.MT.CONFIG.rad.limit / 2, 'dose ' + ignored.dose);
+});
+
+test('training storms are copies of real recorded storms, and a big one needs the shelter', () => {
+  for (let seed = 1; seed <= 8; seed++) {
+    const st = S.create({ scenario: 'training', seed });
+    assert.ok(st.storms.every((s) => s.profile && s.realName), 'seed ' + seed + ' uses real storm shapes');
+    assert.strictEqual(st.storms.filter((s) => s.strong).length, 1, 'exactly one big storm');
+    const ignored = play('training', seed, goodSetup);
+    assert.strictEqual(ignored.failure && ignored.failure.cause, 'radiation', 'seed ' + seed + ': ignoring a big storm is deadly');
+  }
+});
+
+test('working outside during a big real storm is deadly', () => {
+  // Seed 5 gets a copy of the January 2012 storm at hour ~250.
+  const st = play('training', 5, goodSetup, (s) => { if (s.hour === 250) S.startBerm(s); });
+  assert.strictEqual(st.failure && st.failure.cause, 'radiation');
+  assert.ok(st.doseFrom.outside > 100, 'outside dose ' + st.doseFrom.outside);
 });
 
 test('each coming shadow is warned about exactly once', () => {
@@ -73,6 +97,66 @@ test('each coming shadow is warned about exactly once', () => {
   // Plain has 2 shadow periods, ridge has 1, and this plan has panels on both.
   assert.strictEqual(titles.filter((t) => /plain/.test(t)).length, 2, titles.join(' | '));
   assert.strictEqual(titles.filter((t) => /ridge/.test(t)).length, 1, titles.join(' | '));
+});
+
+test('Astronomy Tower: buildable anywhere, uses no power, cannot be switched off', () => {
+  const st = S.create({ scenario: 'training', seed: 3 });
+  const r = S.place(st, 'tower', 4, 4);
+  assert.ok(r.ok, 'tower placed');
+  while (!r.m.built) S.step(st);
+  assert.strictEqual(S.needOf(st, r.m), 0);
+  assert.strictEqual(S.toggle(st, r.m.id), false, 'click opens the picture instead of toggling');
+});
+
+test('APOD feed: picks the newest IMAGE post, asks for a smaller copy, strips HTML', () => {
+  require(path.join(__dirname, '../js/apod.js'));
+  const p = globalThis.MT.APOD._pick([
+    { media_type: 'video', hdurl: '', title: 'A video day' },
+    { media_type: 'image', date: '2026-11-14', title: 'Apollo 12 &amp; Surveyor 3', explanation: '<strong>Explanation:</strong> Put on <a href="x">glasses</a>.',
+      credit: '<a href="y">NASA</a>', permalink: 'https://science.nasa.gov/image-article/x/',
+      hdurl: 'https://assets.science.nasa.gov/dynamicimage/a.jpg?w=4000&h=3000&fit=clip&crop=faces%2Cfocalpoint' },
+  ]);
+  assert.strictEqual(p.title, 'Apollo 12 & Surveyor 3');
+  assert.strictEqual(p.text, 'Put on glasses.', 'tags and the "Explanation:" label are removed');
+  assert.strictEqual(p.credit, 'NASA');
+  assert.match(p.image, /w=1400&h=1400&fit=clip$/);
+  assert.strictEqual(globalThis.MT.APOD._pick([{ media_type: 'image', hdurl: 'javascript:alert(1)' }]), null, 'only https images');
+});
+
+test('first built tower shows today; later towers show the archive', () => {
+  const st = S.create({ scenario: 'training', seed: 4 });
+  const a = S.place(st, 'tower', 4, 4).m, b = S.place(st, 'tower', 5, 4).m;
+  assert.strictEqual(S.firstTower(st), null, 'nothing built yet');
+  while (!a.built || !b.built) S.step(st);
+  assert.strictEqual(S.firstTower(st), a);
+});
+
+test('archive picture: random week between 1995-06-16 and the day before today, skips videos and placeholders', async () => {
+  require(path.join(__dirname, '../js/apod.js'));
+  const A = globalThis.MT.APOD;
+  const urls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    const today = { media_type: 'image', date: '2026-11-14', title: 'Today', hdurl: 'https://assets.science.nasa.gov/t.jpg' };
+    const list = /date_from/.test(url) ? [
+      { media_type: 'video', date: '1999-07-06', hdurl: 'https://assets.science.nasa.gov/v.jpg' },
+      { media_type: 'image', date: '1999-07-05', hdurl: 'https://assets.science.nasa.gov/dynamicimage/assets/science/astro/programs/cosmic-origins/images/misc/news-thumbnail.png?w=594' },
+      { media_type: 'image', date: '1999-07-04', title: 'Mars Pathfinder', hdurl: 'https://assets.science.nasa.gov/content/dam/x.jpg' },
+    ] : [today];
+    return { ok: true, json: async () => list };
+  };
+  try {
+    let n = 0;
+    const p = await A._archivePicture(() => [0.5, 0][n++ % 2]);
+    assert.strictEqual(p.date, '1999-07-04', 'video and placeholder skipped');
+    assert.strictEqual(p.archive, true);
+    const q = urls.find((u) => /date_from/.test(u));
+    const [, from, to] = q.match(/date_from=(\d{6})&date_to=(\d{6})/);
+    const toDate = (s) => Date.UTC((+s.slice(0, 2) < 90 ? 2000 : 1900) + +s.slice(0, 2), +s.slice(2, 4) - 1, +s.slice(4, 6));
+    assert.ok(toDate(from) >= Date.UTC(1995, 5, 16) && toDate(to) < Date.UTC(2026, 10, 14), from + '..' + to);
+    assert.strictEqual(A._yymmdd(Date.UTC(1995, 5, 16)), '950616');
+  } finally { globalThis.fetch = realFetch; }
 });
 
 test('building rules', () => {

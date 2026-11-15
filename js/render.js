@@ -172,6 +172,20 @@
           if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', cx, y + 7); }
           break;
         }
+        case 'tower': {
+          // Square base, white observatory dome with an open slit, and a telescope that slowly sweeps the sky.
+          ctx.fillStyle = '#4b5361'; ctx.fillRect(x + 9, cy + 2, w - 18, 14);
+          ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 9, cy + 2, w - 18, 14);
+          ctx.fillStyle = '#e4e8ee'; ctx.beginPath(); ctx.arc(cx, cy + 2, 12, Math.PI, 0); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = '#9aa2af'; ctx.stroke();
+          const sweep = m.built ? Math.sin(time * 0.6 + m.id) * 0.5 : 0;
+          ctx.save(); ctx.translate(cx, cy - 2); ctx.rotate(sweep);
+          ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
+          ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
+          ctx.restore();
+          if (m.built && blink) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); }
+          break;
+        }
       }
       ctx.restore();
 
@@ -184,7 +198,7 @@
       } else if (!m.on) {
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y, w, h);
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', x + w / 2, y + h / 2 + 4);
-      } else if (m.type !== 'solar' && m.type !== 'battery' && m.type !== 'shelter' && !m.powered) {
+      } else if (m.type !== 'solar' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower' && !m.powered) {
         ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fillRect(x, y, w, h);
         if (blink) { ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillText('⚡', x + w - 9, y + 15); }
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);

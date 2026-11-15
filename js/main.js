@@ -93,6 +93,7 @@
     } else {
       const m = MT.Sim.moduleAt(state, t.c, t.r);
       if (m && !m.built) MT.Sim.cancel(state, m.id);
+      else if (m && m.type === 'tower') { openTower(m); return; }
       else if (m) MT.Sim.toggle(state, m.id);
     }
     refresh();
@@ -103,8 +104,25 @@
     if (ui.isModalOpen() || !state) return;
     if (e.code === 'Space') { e.preventDefault(); setSpeed(speed ? 0 : lastSpeed); }
     else if (e.key === 'Escape') ui.select(null);
-    else if (/^[1-6]$/.test(e.key)) { const t = MT.CONFIG.buildOrder[+e.key - 1]; ui.select(ui.selected === t ? null : t); }
+    else if (/^[1-9]$/.test(e.key) && +e.key <= MT.CONFIG.buildOrder.length) { const t = MT.CONFIG.buildOrder[+e.key - 1]; ui.select(ui.selected === t ? null : t); }
   });
+
+  // Astronomy Tower: pause the mission while the player looks at the picture, then resume.
+  // The first tower shows today's picture; every other tower keeps its own random archive picture.
+  function openTower(m) {
+    const resume = speed; // stays paused if the player had paused
+    setSpeed(0);
+    ui.tooltip(state, null, false);
+    const archive = MT.Sim.firstTower(state) !== m;
+    try {
+      ui.showTower({ archive, key: state.seed + ':' + m.id }, () => { setSpeed(resume); showNext(); });
+    } catch (err) {
+      // Never leave the mission frozen. (Usually an old cached script: press Ctrl+F5.)
+      console.error('Astronomy Tower failed to open:', err);
+      setSpeed(resume);
+      ui.capcom({ level: 'warn', title: 'Astronomy Tower error', text: 'The picture viewer could not open. Try reloading the page with Ctrl+F5.' });
+    }
+  }
 
   menu();
   requestAnimationFrame(frame);

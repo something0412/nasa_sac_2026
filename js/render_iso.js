@@ -141,12 +141,12 @@
         g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
         g.fillRect(p.x, p.y, s, s);
       }
-      for (let i = 0; i < 23 * area; i++) {
-        const p = P(rand() * COLS, rand() * ROWS), rr = (4 + rand() ** 2 * 30) * 1.25;
-        g.beginPath(); g.ellipse(p.x, p.y, rr, rr / 2, 0, 0, Math.PI * 2); g.fillStyle = 'rgba(0,0,0,0.13)'; g.fill();
-        g.beginPath(); g.ellipse(p.x - rr * 0.12, p.y - rr * 0.06, rr * 0.85, rr * 0.42, 0, 0, Math.PI * 2); g.fillStyle = 'rgba(0,0,0,0.08)'; g.fill();
-        g.beginPath(); g.ellipse(p.x, p.y, rr, rr / 2, 0, Math.PI * 0.1, Math.PI * 0.9); g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1.5; g.stroke();
-      }
+      const base = document.createElement('canvas'); // the ground before craters (see drawCrater in render.js)
+      base.width = W; base.height = H; base.getContext('2d').drawImage(off, 0, 0);
+      const craters = [];
+      for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
+      craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
+      for (const k of craters) MT.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
       g.restore();
       g.save(); g.clip(paths.ice);
       for (let i = 0; i < 260 * area; i++) {

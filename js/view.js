@@ -50,7 +50,7 @@
     }
 
     return {
-      draw: (state, dt, ui) => { lastState = state; motion.update(state, dt, ui && ui.paused); cur().draw(state, dt, ui); prepareOther(); },
+      draw: (state, dt, ui) => { lastState = state; motion.update(state, dt, ui && ui.paused, ui && ui.frac); cur().draw(state, dt, ui); prepareOther(); },
       drawForecast: (state) => views.top.drawForecast(state), // the sunlight strip is the same in both views
       tileAt: (e) => cur().tileAt(e),
       toCanvas: (e) => cur().toCanvas(e),

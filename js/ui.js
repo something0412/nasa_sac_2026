@@ -258,7 +258,7 @@
 
     // ----- astronaut picker at the top of the Build panel -----
     let lastPick = '';
-    function statusOf(a, jobs) {
+    function statusOf(a, jobs, state) {
       if (a.medbay) return 'in the medbay';
       if (a.trip) return 'in the rover';
       if (a.heal) return `healing ${Math.ceil(a.heal.left)} h`;
@@ -266,7 +266,7 @@
       if (a.where === 'shelter') return 'in the shelter';
       if (a.paused) return `${a.paused.kind === 'lab' ? 'research' : 'greenhouse'} on hold`;
       if (a.where === 'gym') return 'training';
-      if (a.where === 'outside') return 'working outside';
+      if (a.where === 'outside') return LW.Sim.walkLeft(a, state.hour - 1) > 0 ? 'walking to a job' : 'working outside';
       const queued = jobs.filter((j) => j.assignee === a.id).length;
       return queued ? `${queued} job${queued > 1 ? 's' : ''} waiting` : 'free';
     }
@@ -275,7 +275,7 @@
       const html = state.crew.map((a) => {
         const r = RI[a.role];
         return `<button class="crewBtn${selectedCrew === a.id ? ' sel' : ''}" data-crew="${a.id}"${a.medbay ? ' disabled' : ''} style="--rc:${r.color}" title="${esc(a.name)}: ${r.name}, ${r.does}. (Shift+${a.id})">` +
-          `<span class="amsId">${a.id}</span><span class="cr">${r.icon} ${r.name}</span><small>${esc(statusOf(a, jobs))}</small></button>`;
+          `<span class="amsId">${a.id}</span><span class="cr">${r.icon} ${r.name}</span><small>${esc(statusOf(a, jobs, state))}</small></button>`;
       }).join('');
       if (html !== lastPick) { $('crewPick').innerHTML = html; lastPick = html; }
     }
@@ -299,7 +299,10 @@
         if (a.where === 'gym') return '🏋️ Training in the Fitness Center';
         if (a.where === 'outside') {
           const j = jobs.find((x) => x.key === a.job);
-          return '🔧 Outside: ' + (!j ? 'working' : j.kind === 'berm' ? 'piling moon dirt' : (j.kind === 'repair' ? 'repairing ' : 'building ') + C.modules[j.m.type].name);
+          const what = !j ? 'working' : j.kind === 'berm' ? 'piling moon dirt' : (j.kind === 'repair' ? 'repairing ' : 'building ') + C.modules[j.m.type].name;
+          const w = LW.Sim.walkLeft(a, state.hour - 1);
+          if (j && w > 0) return `🚶 On the way: ${what} · ${w < 1 ? '<1' : '~' + Math.ceil(w)} h`;
+          return '🔧 Outside: ' + what;
         }
         const queued = jobs.filter((j) => j.assignee === a.id).length;
         return `🏠 In ${manyHabs ? LW.Sim.habName(state, LW.Sim.homeOf(state, a)) : 'the habitat'}` + (queued ? ` · ${queued} job${queued > 1 ? 's' : ''} waiting` : '');
@@ -456,14 +459,14 @@
     function showStart(onChoose) {
       modal(`
         <h1>Lunar World</h1>
-        <p class="lead">You are the commander of Shackleton Base, a Moon base near the lunar south pole, where NASA's Artemis astronauts plan to go. Keep the base running for <b>as many days as you can</b>. It only closes when no astronaut is left on the Moon.</p>
+        <p class="lead">You are the commander of Zain Base, a Moon base near the lunar south pole, where NASA's Artemis astronauts plan to go. Keep the base running for <b>as many days as you can</b>. It only closes when no astronaut is left on the Moon.</p>
         <div class="howto">
           <div>☀️ <b>Power</b>: the Sun circles the horizon here. Hills block it, so shadows move. Panels in shadow make nothing.</div>
           <div>🫁 <b>Air</b>: the O₂ Generator turns water into oxygen. It needs power AND water.</div>
           <div>🍞 <b>Food</b>: greenhouses grow food but need lots of power.</div>
           <div>☢️ <b>Radiation</b>: solar flares can send radiation storms. Hide the crew in a shelter.</div>
           <div>👩‍🚀 <b>Crew</b>: always <b>pick an astronaut first</b>, then what to build or use. Engineers (1, 2) build and repair, the Scientist (3) researches upgrades, the Botanist (4) tends the greenhouse.</div>
-          <div>🚀 <b>Every 30 days</b> a crew spaceship brings 2 new astronauts, but it can only land on a <b>Landing Pad</b> next to a HAB. Build more HABs for more room, and a <b>rover</b> to drive astronauts between them.</div>
+          <div>🚀 <b>Every 30 days</b> a crew spaceship brings 2 new astronauts, but it can only land on a <b>Landing Pad</b> next to a HAB (your base starts with one). Build more HABs for more room, and a <b>rover</b> to drive astronauts between them.</div>
           <div>☄️ <b>Meteor showers</b> and <b>accidents</b> (leaks, plant disease, moondust) cost buildings and supplies. A Research Bay makes nearby machines faster.</div>
         </div>
         <div class="choices">

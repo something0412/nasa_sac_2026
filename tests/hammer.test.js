@@ -6,6 +6,7 @@ require('../js/config.js');
 require('../js/iso.js');
 require('../js/sim.js');
 require('../js/crew_motion.js'); // shared astronaut positions used by both views
+require('../js/shapes.js'); // building signs (js/shapes.js) used by both renderers
 require('../js/render.js');
 require('../js/render_iso.js');
 
@@ -44,7 +45,9 @@ for (const view of ['Renderer', 'IsoRenderer']) {
     function draw(paused = false, dt = 0.1) {
       canvas.calls.length = 0;
       const before = JSON.stringify(state);
-      renderer.draw(state, dt, { paused, frac: 0 });
+      // The game clock runs while not paused (2 s per game hour, like main.js): Engineers walk to a site on game
+      // time and only start hammering once they get there.
+      renderer.draw(state, dt, { paused, frac: Math.min(0.999, workTime / 2) });
       if (!paused) workTime += dt;
       assert.equal(JSON.stringify(state), before, 'drawing preserves simulation state');
     }
@@ -52,12 +55,14 @@ for (const view of ['Renderer', 'IsoRenderer']) {
     assert.equal(head(), undefined);
     let site = null;
     const base = LW.CONFIG.base;
-    for (let r = base.r - 4; r <= base.r + 4 && !site; r++) {
-      for (let c = base.c - 4; c <= base.c + 4 && !site; c++) {
-        if (!LW.Sim.canPlace(state, 'solar', c, r).ok) continue;
-        assert.ok(LW.Sim.place(state, 'solar', c, r).ok);
-        site = state.modules.find(module => !module.built);
-      }
+    // The free spot closest to the HAB, so the Engineer's walk there (game time, see draw) fits in one game hour.
+    const spots = [];
+    for (let r = base.r - 4; r <= base.r + 4; r++) for (let c = base.c - 4; c <= base.c + 4; c++) spots.push({ c, r });
+    spots.sort((a, b) => Math.hypot(a.c - base.c - 1, a.r - base.r - 1) - Math.hypot(b.c - base.c - 1, b.r - base.r - 1));
+    for (const { c, r } of spots) {
+      if (site || !LW.Sim.canPlace(state, 'solar', c, r).ok) continue;
+      assert.ok(LW.Sim.place(state, 'solar', c, r).ok);
+      site = state.modules.find(module => !module.built);
     }
     assert.ok(site);
     LW.Sim.step(state);

@@ -10,6 +10,7 @@ require('../js/config.js');
 require('../js/iso.js');
 require('../js/sim.js');
 require('../js/crew_motion.js');
+require('../js/shapes.js'); // building signs (js/shapes.js) used by both renderers
 require('../js/render.js');
 require('../js/render_iso.js');
 const LW = globalThis.LW;

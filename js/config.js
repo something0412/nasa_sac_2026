@@ -18,6 +18,8 @@
     },
     // ROVER (bought with a button, not built on the map): drives up to 4 astronauts between HABs.
     rover: { cost: 15, seats: 4, tilesPerH: 12 }, // GAME: 12 tiles (120 m) per game hour, at least 1 hour per trip
+    // WALKING: an Engineer first walks from their HAB to the job site; the work only starts once they get there.
+    walk: { tilesPerH: 6 }, // GAME: 6 squares (60 m) per game hour in a bulky suit carrying tools (the rover is 2x faster)
     // LANDING PAD: crew spaceships can only land on a finished Landing Pad that is within `radius` squares of a
     // finished HAB (centre to centre), and no two pads may be within `radius` of each other (each pad has its own
     // area, so it is clear which HAB its astronauts belong to). No such pad when the ship arrives = it turns back.
@@ -242,7 +244,7 @@
     // REAL: an adult uses about 0.84 kg O2 and ~1.8 kg food (with packaging) per day (NASA BVAD, NASA/TP-2015-218570).
     use: { o2PerPersonH: 0.84 / 24, foodPerPersonH: 1.8 / 24, waterPerPersonH: 0.5 / 24 /* GAME: water lost after recycling */ },
 
-    start: { o2: 25, food: 60, water: 150, battery: 30, parts: 20 },
+    start: { o2: 25, food: 60, water: 150, battery: 30, parts: 25 },
     caps: { o2: 40, water: 300 },
 
     rad: {
@@ -280,7 +282,7 @@
     cargoAskLead: 48,
     cargoOptions: {
       food: { name: 'Food pack', icon: '🍞', text: '+60 kg food', give: { food: 60 } },
-      parts: { name: 'Building parts', icon: '🔩', text: '+20 parts', give: { parts: 20 } },
+      parts: { name: 'Building parts', icon: '🔩', text: '+30 parts', give: { parts: 30 } },
 
       life: { name: 'Water & air', icon: '💧', text: '+60 kg water, +15 kg O₂', give: { water: 60, o2: 15 } },
     },

@@ -46,8 +46,9 @@
       return { c, r, visible, job };
     }
 
-    /** Move everyone one frame toward where they should be. Call once per frame. */
-    function update(state, dt, paused) {
+    /** Move everyone one frame toward where they should be. Call once per frame.
+     *  frac = how far into the current game hour the clock is (for Engineers walking to a job, see below). */
+    function update(state, dt, paused, frac) {
       time += dt;
       if (!paused && state.status === 'running') workTime += dt;
       const jobs = LW.Sim.jobList(state), shelters = LW.Sim.built(state, 'shelter');
@@ -57,6 +58,20 @@
         p.active = true;
         if (A.trip) { p.init = false; p.visible = false; p.dist = 0; p.building = null; continue; } // inside the rover: appear at the new HAB
         const t = target(state, A, jobs, shelters);
+        // An Engineer on the way to a job: the game rules time the walk (sim.js: the work only starts once they
+        // get there), so draw them exactly where the rules say, at any game speed, ending at their work spot.
+        // (Without the game clock, frac is undefined: then they just walk there at the normal speed.)
+        const wp = frac != null && A.where === 'outside' && LW.Sim.walkPoint ? LW.Sim.walkPoint(state, A, frac) : null;
+        if (wp) {
+          const key = A.walk.key + '@' + A.walk.startH; // a new walk: it starts from where they are drawn (no jump)
+          if (p.walkKey !== key) { p.walkKey = key; p.walkFrom = p.init ? { c: p.c, r: p.r } : { c: wp.from.c, r: wp.from.r }; }
+          const f0 = p.walkFrom, mc = t.c - f0.c, mr = t.r - f0.r;
+          p.c = f0.c + mc * wp.p; p.r = f0.r + mr * wp.p; p.init = true;
+          p.dir = Math.atan2(mr, mc);
+          if (Math.abs(mc - mr) > Math.hypot(mc, mr) * 0.1) p.face = mc - mr > 0 ? 1 : -1;
+          p.walk = Math.min(1, p.walk + dt * 6); p.dist = Math.hypot(t.c - p.c, t.r - p.r); p.visible = true; p.building = null;
+          continue;
+        }
         if (!p.init) { p.c = t.c; p.r = t.r; p.init = true; }
         const dc = t.c - p.c, dr = t.r - p.r, d = Math.hypot(dc, dr), step = SPEED * dt;
         const moving = d > step;

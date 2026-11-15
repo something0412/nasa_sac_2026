@@ -1,7 +1,7 @@
 # Lunar World
 
 A 2D browser game for NASA Space Apps 2026 (challenge: *Build a Junior Astronaut Mission Trainer*).
-You run Shackleton Base, a Moon base at the lunar south pole, and keep it going
+You run Zain Base, a Moon base at the lunar south pole, and keep it going
 for as many days as you can by balancing **power, oxygen, water, food and radiation**. The game is
 endless: it only ends when no astronaut is left on the Moon.
 
@@ -9,6 +9,7 @@ endless: it only ends when no astronaut is left on the Moon.
   **Landing Pad** (10 parts) within 6 squares of a finished **HAB** (15 parts, built by an Engineer). Then it
   touches down on the pad (animation), brings **2 new astronauts** whose jobs you choose, and restocks the
   medbay. They live in the HAB closest to the pad they landed on (with several ready pads, you pick the pad).
+  The starting base already has one Landing Pad next to HAB 1 (the opening animation lands on it).
   No two Landing Pads may be within 6 squares of each other, so each pad clearly belongs to one HAB.
   No such pad when it arrives = it flies back, and the next one comes 30 days later.
 - Every game also opens with the crew's spaceship landing at the base (animation only).
@@ -29,6 +30,8 @@ Controls: **always pick an astronaut first** (buttons at the top of Build, an AM
 map, or Shift+1-9), then pick what they do:
 - Engineers (Astronaut 1, 2 at the start): pick a build button (or keys 1-9) and click the map; click a damaged module
   (cracks + 🔧) to repair it (1 part); click a building site (or the habitat, for the shield) to give them that job.
+  They first walk from their HAB to the site (6 squares per game hour, outside = full radiation); the work starts
+  once they get there, so far-away sites take longer.
 - Scientists (Astronaut 3 at the start): click a Research Bay to research an upgrade (1 day in the lab).
 - Botanists (Astronaut 4 at the start): click a greenhouse to tend it for 1 day (2x food).
 - Sending the crew to the shelter puts research / greenhouse work on hold. Afterwards, pick the Scientist or

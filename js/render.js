@@ -744,13 +744,8 @@
     // ---------- the rover (TEMPORARY model: a box on 4 wheels, to be replaced with better art later) ----------
     // Parked next to its HAB; while driving it moves smoothly from one HAB to the other.
     function roverAt(state) {
-      const rv = state.rover;
-      if (!rv) return null;
-      const parked = (id) => { const H = state.modules.find((m) => m.id === id); const c = center(H); return { x: c.x + T * 1.3, y: c.y + T * 1.2 }; };
-      if (!rv.trip) return { ...parked(rv.habId), ang: 0, moving: false };
-      const a = parked(rv.trip.from), b = parked(rv.trip.to);
-      const t = Math.max(0, Math.min(1, (rv.trip.total - rv.trip.left + frac) / rv.trip.total)), e = t * t * (3 - 2 * t);
-      return { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, ang: Math.atan2(b.y - a.y, b.x - a.x), moving: true, riders: rv.trip.crew.length };
+      const p = MT.Sim.roverPosition(state, frac);
+      return p ? { x: p.c * T, y: p.r * T, ang: Math.atan2(p.dir.r, p.dir.c), moving: p.moving, riders: p.riders } : null;
     }
     function drawRover(state) {
       const p = roverAt(state);

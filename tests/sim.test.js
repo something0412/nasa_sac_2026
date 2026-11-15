@@ -88,7 +88,7 @@ test('May 2024 storm radiation is the real LRO measurement, hour by hour', () =>
   // Real May 2024 was survivable even without the shelter, but the shelter still cuts the dose.
   const ignored = play('history', 1, goodSetup);
   assert.strictEqual(ignored.status, 'won');
-  assert.ok(ignored.crew.every((a) => !a.medbay), 'nobody ends up in the medbay in May 2024: ' + ignored.crew.map((a) => Math.round(a.hp)).join(','));
+  assert.ok(ignored.crew.length === 4 && ignored.crew.every((a) => !a.medbay), 'nobody is sent home in May 2024: ' + ignored.crew.map((a) => Math.round(a.hp)).join(','));
 });
 
 test('training storms are copies of real recorded storms, and a big one needs the shelter', () => {
@@ -103,7 +103,7 @@ test('training storms are copies of real recorded storms, and a big one needs th
   }
 });
 
-test('working outside during a big real storm sends that astronaut to the medbay', () => {
+test('working outside during a big real storm gets that astronaut sent home to Earth', () => {
   // Seed 5 gets a copy of the January 2012 storm at hour ~250. One astronaut goes out to pile moon dirt.
   let worker = null;
   const st = play('training', 5, goodSetup, (s) => {
@@ -111,22 +111,23 @@ test('working outside during a big real storm sends that astronaut to the medbay
     if (!worker) worker = s.crew.find((a) => a.job === 'berm') || null;
   });
   assert.ok(worker, 'someone took the shielding job');
-  assert.strictEqual(worker.medbay, true, worker.name + ' should be in the medbay');
+  assert.strictEqual(worker.home, true, worker.name + ' should be sent home');
+  assert.ok(st.sentHome.includes(worker) && !st.crew.includes(worker), 'and is gone from the roster');
   assert.ok(st.doseFrom.outside > 100, 'outside dose ' + st.doseFrom.outside);
 });
 
 // ---------------- Astronaut Management System ----------------
-test('crew: 4 named astronauts; each job gets exactly one, at most maxOutside outside', () => {
-  const C = globalThis.MT.CONFIG;
+test('crew: 4 named astronauts with roles; each job gets exactly one Engineer', () => {
   const st = S.create({ scenario: 'training', seed: 3 });
   assert.deepStrictEqual(st.crew.map((a) => a.name), ['Astronaut 1', 'Astronaut 2', 'Astronaut 3', 'Astronaut 4']);
+  assert.deepStrictEqual(st.crew.map((a) => a.role), ['engineer', 'engineer', 'scientist', 'botanist']);
   build(st, 'solar', 'plain'); build(st, 'solar', 'plain'); build(st, 'battery', 'plain');
   S.step(st);
   const jobs = S.jobList(st);
   const workers = st.crew.filter((a) => a.where === 'outside');
-  assert.strictEqual(workers.length, C.maxOutside);
+  assert.deepStrictEqual(workers.map((a) => a.id), [1, 2], 'only the two Engineers go out');
   assert.strictEqual(new Set(workers.map((a) => a.job)).size, workers.length, 'never two astronauts on one job');
-  assert.strictEqual(jobs.filter((j) => j.worker).length, C.maxOutside);
+  assert.strictEqual(jobs.filter((j) => j.active).length, 2);
   // A 6-crew-hour solar panel now takes 6 hours (one astronaut), not 3.
   const first = st.modules.find((m) => m.type === 'solar' && !m.built);
   for (let i = 0; i < 5; i++) S.step(st);
@@ -140,12 +141,18 @@ test('health: 600 mSv = all health, so living in the habitat lasts about 2 years
   assert.ok(days > 730 && days < 1000, 'habitat-only survival ~' + Math.round(days) + ' days');
 });
 
-test('medbay: astronauts with no health leave, stop eating, and the mission ends when none are left', () => {
+test('sent home: an astronaut whose health runs out leaves the roster (pop-up), stops eating; all gone = mission over', () => {
   const st = S.create({ scenario: 'training', seed: 2 });
   goodSetup(st);
-  st.crew[0].wounds.push({ hp: 200, what: 'test' }); st.crew[0].injury = 200; // out of health
-  S.step(st);
-  assert.strictEqual(st.crew[0].medbay, true);
+  const first = st.crew[0];
+  first.dose = 600; // the whole health bar is radiation
+  const ev = S.step(st);
+  const pop = ev.find((e) => e.popup === 'home');
+  assert.ok(pop && pop.who === 'Astronaut 1' && pop.left === 3, 'pop-up event for the player');
+  assert.deepStrictEqual(st.crew.map((a) => a.id), [2, 3, 4], 'gone from the roster');
+  assert.strictEqual(st.sentHome[0], first);
+  assert.strictEqual(S.crewSummary(st).total, 4);
+  assert.strictEqual(S.useTower(st, 999, 1).ok, false);
   const before = st.stats.foodEaten;
   S.step(st);
   const eaten = st.stats.foodEaten - before;
@@ -154,12 +161,33 @@ test('medbay: astronauts with no health leave, stop eating, and the mission ends
   S.step(st);
   assert.strictEqual(st.status, 'lost');
   assert.strictEqual(st.failure.cause, 'crew');
-  assert.ok(S.debrief(st).chain.some((c) => /medbay/.test(c.text)));
+  assert.strictEqual(st.crew.length, 0);
+  const d = S.debrief(st);
+  assert.strictEqual(d.title, 'Every astronaut was sent home to Earth');
+  assert.strictEqual(d.chain.filter((c) => /sent home to Earth/.test(c.text)).length, 4);
 });
 
-test('bones: a Fitness Center keeps them strong; without one astronauts get grounded', () => {
+test('bones at 0% still means the medbay on the Moon (they stay on the roster)', () => {
+  const st = S.create({ scenario: 'training', seed: 3 });
+  st.crew[1].bone = 0.01;
+  S.step(st);
+  assert.strictEqual(st.crew.length, 4);
+  assert.strictEqual(st.crew[1].medbay, true);
+  assert.strictEqual(st.sentHome.length, 0);
+});
+
+
+test('bones: the player sends astronauts to the Fitness Center (never automatic); without it they get grounded', () => {
   const B = globalThis.MT.CONFIG.astro.bone;
-  const withGym = play('history', 1, (s) => { goodSetup(s); build(s, 'gym', 'plain'); }, shelterBot);
+  const lazy = play('history', 1, (s) => { goodSetup(s); build(s, 'gym', 'plain'); }, shelterBot);
+  assert.ok(lazy.crew.every((a) => a.bone < B.groundedBelow), 'a gym nobody is sent to does nothing: ' + lazy.crew.map((a) => Math.round(a.bone)).join(','));
+  const gymBot = (s, ev) => {
+    shelterBot(s, ev);
+    const g = S.built(s, 'gym')[0];
+    if (g) for (const a of S.activeCrew(s)) if (a.sinceGym >= B.visitEveryH - 2) S.sendToGym(s, g.id, a.id);
+  };
+  const withGym = play('history', 1, (s) => { goodSetup(s); build(s, 'gym', 'plain'); }, gymBot);
+
   const noGym = play('history', 1, goodSetup, shelterBot);
   assert.ok(withGym.crew.every((a) => a.bone > 90), 'with gym: ' + withGym.crew.map((a) => Math.round(a.bone)).join(','));
   assert.ok(noGym.crew.every((a) => a.bone < B.groundedBelow), 'no gym: ' + noGym.crew.map((a) => Math.round(a.bone)).join(','));
@@ -208,20 +236,28 @@ test('medbay healing: 3 days, exactly 10 HP (smallest injuries first), never abo
   assert.strictEqual(st.medbayUses, M.uses);
 });
 
-test('stress: rises outside; the first look through each NEW tower lowers it once', () => {
-  const C = globalThis.MT.CONFIG;
+test('stress: rises outside; a tower visit lowers only that astronaut\'s stress, and each tower works every 12 h', () => {
+  const C = globalThis.MT.CONFIG, St = C.astro.stress;
   const st = S.create({ scenario: 'training', seed: 4 });
   const t = freeTile(st, 'plain', 'tower');
-  const tower = S.place(st, 'tower', t.c, t.r).m;
+  const tower = S.place(st, 'tower', t.c, t.r, 1).m;
   while (!tower.built) S.step(st);
-  const builder = st.crew.find((a) => a.stress > 0);
-  assert.ok(builder && builder.stress >= C.astro.stress.outsidePerH * 5, 'building outside raised stress');
+  const builder = st.crew[0], other = st.crew[1];
+  assert.ok(builder.stress >= St.outsidePerH * 5, 'building outside raised stress');
+  other.stress = 40;
   const before = builder.stress;
-  assert.strictEqual(S.enterTower(st, tower.id).relief, true);
-  assert.ok(builder.stress < before, 'first look lowers stress');
-  const after = builder.stress;
-  assert.strictEqual(S.enterTower(st, tower.id).relief, false, 'only the first look counts');
-  assert.strictEqual(builder.stress, after);
+  const r = S.useTower(st, tower.id, builder.id);
+  assert.ok(r.ok); assert.strictEqual(r.visit, 1, 'first visit of the mission (shows today\'s picture)');
+  assert.ok(builder.stress < before, 'their stress went down');
+  assert.strictEqual(other.stress, 40, 'nobody else\'s stress changes');
+  assert.strictEqual(S.useTower(st, tower.id, other.id).ok, false, 'tower is resting for 12 hours');
+  S.step(st);
+  assert.strictEqual(builder.where, 'tower', 'they spend an hour at the tower');
+  for (let i = 1; i < St.towerCooldownH; i++) S.step(st);
+  assert.strictEqual(S.towerReadyIn(st, tower), 0);
+  const r2 = S.useTower(st, tower.id, other.id);
+  assert.ok(r2.ok); assert.strictEqual(r2.visit, 2, 'later visits show archive pictures');
+  assert.strictEqual(other.stress, 40 - St.towerRelief);
 });
 
 test('damage: half output until repaired; damaged towers cannot be entered; repair costs 1 part and 1 astronaut', () => {
@@ -231,15 +267,191 @@ test('damage: half output until repaired; damaged towers cannot be entered; repa
   const tower = S.place(st, 'tower', t.c, t.r).m;
   while (!tower.built) S.step(st);
   tower.damaged = true;
-  assert.strictEqual(S.enterTower(st, tower.id).ok, false);
+  assert.strictEqual(S.useTower(st, tower.id, 3).ok, false);
   const parts = st.res.parts;
-  assert.ok(S.orderRepair(st, tower.id).ok);
+  assert.strictEqual(S.orderRepair(st, tower.id, 3).ok, false, 'only Engineers repair');
+  assert.ok(S.orderRepair(st, tower.id, 2).ok);
   assert.strictEqual(st.res.parts, parts - C.damage.repairCost);
-  assert.strictEqual(S.orderRepair(st, tower.id).ok, false, 'no double repair');
+  assert.strictEqual(S.orderRepair(st, tower.id, 1).ok, false, 'no double repair');
   S.step(st);
-  assert.strictEqual(st.crew.filter((a) => a.job === 'r' + tower.id).length, 1, 'exactly one astronaut repairs');
+  assert.deepStrictEqual(st.crew.filter((a) => a.job === 'r' + tower.id).map((a) => a.id), [2], 'exactly the Engineer the player picked repairs');
   while (tower.damaged) S.step(st);
-  assert.strictEqual(S.enterTower(st, tower.id).ok, true);
+  assert.strictEqual(S.useTower(st, tower.id, 3).ok, true);
+});
+
+// ---------------- roles, Research Bay, greenhouse, accidents ----------------
+test('roles: only Engineers build and repair; the player picks who does each job', () => {
+  const st = S.create({ scenario: 'training', seed: 8 });
+  const a = freeTile(st, 'plain', 'solar');
+  assert.strictEqual(S.place(st, 'solar', a.c, a.r, 3).ok, false, 'the Scientist cannot build');
+  assert.strictEqual(S.place(st, 'solar', a.c, a.r, 4).ok, false, 'the Botanist cannot build');
+  const parts = st.res.parts;
+  const p1 = S.place(st, 'solar', a.c, a.r, 2).m;
+  assert.strictEqual(st.res.parts, parts - 2, 'a refused build costs nothing');
+  const b = freeTile(st, 'plain', 'battery');
+  const p2 = S.place(st, 'battery', b.c, b.r, 2).m;
+  S.step(st);
+  assert.strictEqual(st.crew[1].job, 'b' + p1.id, 'Astronaut 2 works on their first job');
+  assert.strictEqual(st.crew[0].where, 'hab', 'Astronaut 1 was not picked, so they stay in');
+  assert.ok(S.assignWorker(st, p2.id, 1).ok, 'give the second job to Astronaut 1');
+  S.step(st);
+  assert.strictEqual(st.crew[0].job, 'b' + p2.id);
+  assert.strictEqual(S.assignWorker(st, p2.id, 4).ok, false);
+  assert.strictEqual(S.startBerm(st, 3).ok, false, 'shield needs an Engineer too');
+});
+
+test('Research Bay: Scientist only, 1 day, costs more each time, boosts nearby machines up to 2x', () => {
+  const C = globalThis.MT.CONFIG, R = C.research;
+  const st = S.create({ scenario: 'training', seed: 5 });
+  st.res.parts = 100;
+  const o2 = st.modules.find((m) => m.type === 'o2gen');
+  // Build the lab right next to the starting O₂ Generator.
+  let spot = null;
+  for (let dc = -2; dc <= 2 && !spot; dc++) for (let dr = -2; dr <= 2 && !spot; dr++) if (S.canPlace(st, 'lab', o2.c + dc, o2.r + dr).ok) spot = { c: o2.c + dc, r: o2.r + dr };
+  const lab = S.place(st, 'lab', spot.c, spot.r, 1).m;
+  const sh = freeTile(st, 'plain', 'shelter');
+  const shelter = S.place(st, 'shelter', sh.c, sh.r, 2).m;
+  while (!lab.built || !shelter.built) S.step(st);
+  assert.strictEqual(S.boostOf(st, o2), 1, 'no research yet');
+  assert.strictEqual(S.startResearch(st, lab.id, 1, 'o2gen').ok, false, 'Engineers cannot research');
+  assert.strictEqual(S.startResearch(st, lab.id, 4, 'o2gen').ok, false, 'Botanists cannot research');
+  const sci = st.crew[2];
+  const parts = st.res.parts;
+  const r = S.startResearch(st, lab.id, sci.id, 'o2gen');
+  assert.ok(r.ok); assert.strictEqual(r.cost, R.costBase); assert.strictEqual(st.res.parts, parts - R.costBase);
+  assert.strictEqual(S.researchCost(st), R.costBase + R.costStep, 'the next upgrade costs more');
+  // In the lab the radiation is the same as in the habitat.
+  const dose0 = sci.dose, bot0 = st.crew[3].dose;
+  S.step(st);
+  assert.strictEqual(sci.where, 'lab');
+  assert.strictEqual(st.crew[3].where, 'hab');
+  assert.ok(Math.abs((sci.dose - dose0) - (st.crew[3].dose - bot0)) < 1e-12, 'lab dose = habitat dose');
+  for (let i = 0; i < 4; i++) S.step(st); // 5 hours of research done
+  // Shelter: the Scientist goes too, and the research waits (19 h left) until the player sends them back.
+  assert.ok(S.setShelter(st, true));
+  S.step(st);
+  assert.strictEqual(sci.where, 'shelter');
+  assert.strictEqual(sci.task, null);
+  assert.strictEqual(sci.paused.left, R.hours - 5);
+  S.setShelter(st, false);
+  for (let i = 0; i < 3; i++) S.step(st);
+  assert.strictEqual(sci.where, 'hab', 'does NOT go back by themselves');
+  assert.strictEqual(st.research.o2gen, 0);
+  assert.strictEqual(S.startResearch(st, lab.id, sci.id, 'drill').ok, false, 'finish the paused research first');
+  const partsBefore = st.res.parts;
+  const back = S.resumeTask(st, lab.id, sci.id);
+  assert.ok(back.ok); assert.strictEqual(back.left, R.hours - 5);
+  assert.strictEqual(st.res.parts, partsBefore, 'continuing costs nothing');
+  for (let i = 0; i < R.hours - 6; i++) S.step(st);
+  assert.strictEqual(st.research.o2gen, 0, 'not done one hour early');
+  S.step(st);
+  assert.strictEqual(sci.task, null, 'done after 1 day');
+  assert.strictEqual(st.research.o2gen, 1);
+  assert.strictEqual(S.boostOf(st, o2), 1 + R.levelBoost, 'nearby O₂ Generator is faster');
+  // Far away = no boost.
+  const far = { ...o2, c: lab.c + R.radius + 3, r: lab.r };
+  assert.strictEqual(S.boostOf(st, far), 1, 'outside the radius: no boost');
+  // A second level reaches 2x; a third is refused.
+  assert.ok(S.startResearch(st, lab.id, sci.id, 'o2gen').ok);
+  assert.strictEqual(S.startResearch(st, lab.id, sci.id, 'drill').ok, false, 'one experiment at a time');
+  for (let i = 0; i < R.hours; i++) S.step(st);
+  assert.strictEqual(S.boostOf(st, o2), 2);
+  assert.strictEqual(S.startResearch(st, lab.id, sci.id, 'o2gen').ok, false, 'max 2x');
+  // A damaged lab gives no boost.
+  lab.damaged = true;
+  assert.strictEqual(S.boostOf(st, o2), 1);
+});
+
+test('greenhouse: only the Botanist; a day of tending doubles its food', () => {
+  const C = globalThis.MT.CONFIG;
+  const grown = (tend) => {
+    const st = S.create({ scenario: 'training', seed: 6 });
+    st.res.battery = 30; st.res.parts = 50;
+    goodSetup(st);
+    const gh = st.modules.find((m) => m.type === 'greenhouse');
+    if (tend) {
+      assert.strictEqual(S.tendGreenhouse(st, gh.id, 1).ok, false, 'Engineers cannot');
+      assert.strictEqual(S.tendGreenhouse(st, gh.id, 3).ok, false, 'Scientists cannot');
+      assert.ok(S.tendGreenhouse(st, gh.id, 4).ok);
+    }
+    const f0 = st.stats.foodMade;
+    for (let i = 0; i < C.botany.hours; i++) S.step(st);
+    return { food: st.stats.foodMade - f0, st };
+  };
+  const plain = grown(false), tended = grown(true);
+  assert.ok(plain.food > 0);
+  assert.ok(tended.food > plain.food * 1.7, `tended ${tended.food} vs ${plain.food}`);
+  assert.strictEqual(tended.st.crew[3].task, null, 'back after 1 day');
+});
+
+test('accidents: happen now and then and cost supplies; work accidents injure the Scientist or Botanist', () => {
+  const C = globalThis.MT.CONFIG;
+  let total = 0, kinds = new Set();
+  for (let seed = 1; seed <= 6; seed++) {
+    const st = play('training', seed, goodSetup, shelterBot);
+    total += st.stats.accidents.length;
+    for (const a of st.stats.accidents) { kinds.add(a.type); assert.ok(a.lost >= 0); }
+  }
+  assert.ok(total >= 12 && total <= 90, 'about one every few days: ' + total);
+  assert.ok(kinds.size >= 3, 'different machines: ' + [...kinds].join(','));
+  // Force a micro-explosion.
+  const st = S.create({ scenario: 'training', seed: 2 });
+  const saved = C.research.accidentChancePerH;
+  C.research.accidentChancePerH = 1;
+  try {
+    st.res.parts = 50;
+    const t = freeTile(st, 'plain', 'lab');
+    const lab = S.place(st, 'lab', t.c, t.r, 1).m;
+    while (!lab.built) S.step(st);
+    S.startResearch(st, lab.id, 3, 'solar');
+    S.step(st);
+    assert.strictEqual(st.crew[2].wounds[0].what, 'lab micro-explosion');
+    assert.strictEqual(st.crew[2].wounds[0].hp, C.research.accidentHp);
+  } finally { C.research.accidentChancePerH = saved; }
+});
+
+test('greenhouse: the shelter puts the Botanist\'s day on hold; clicking the greenhouse again finishes the rest', () => {
+  const C = globalThis.MT.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 6 });
+  st.res.parts = 50;
+  const sh = freeTile(st, 'plain', 'shelter');
+  const shelter = S.place(st, 'shelter', sh.c, sh.r, 1).m;
+  while (!shelter.built) S.step(st);
+  const gh = st.modules.find((m) => m.type === 'greenhouse'), bot = st.crew[3];
+  assert.ok(S.tendGreenhouse(st, gh.id, bot.id).ok);
+  for (let i = 0; i < 10; i++) S.step(st);
+  S.setShelter(st, true); S.step(st);
+  assert.strictEqual(bot.where, 'shelter');
+  assert.strictEqual(bot.paused.left, C.botany.hours - 10);
+  S.setShelter(st, false); S.step(st);
+  assert.strictEqual(bot.where, 'hab', 'waits for the player');
+  const r = S.tendGreenhouse(st, gh.id, bot.id);
+  assert.ok(r.ok && r.resumed); assert.strictEqual(r.left, C.botany.hours - 10, 'the rest of the 24 hours, not a new day');
+  for (let i = 0; i < C.botany.hours - 10; i++) S.step(st);
+  assert.strictEqual(bot.task, null);
+  assert.strictEqual(bot.paused, null);
+});
+
+test('Fitness Center: a 2-hour session lowers stress too', () => {
+  const C = globalThis.MT.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 4 });
+  st.res.parts = 50;
+  const t = freeTile(st, 'plain', 'gym');
+  const gym = S.place(st, 'gym', t.c, t.r, 1).m;
+  while (!gym.built) S.step(st);
+  const a = st.crew[2];
+  a.stress = 60;
+  S.step(st); // the gym gets power
+  assert.ok(S.sendToGym(st, gym.id, a.id).ok);
+  for (let i = 0; i < C.astro.bone.visitH; i++) S.step(st);
+  assert.strictEqual(a.gymLeft, 0, 'session over after 2 hours');
+  assert.ok(Math.abs(a.stress - (60 - C.astro.bone.visitH * C.astro.stress.gymReliefPerH)) < 1e-9, 'stress ' + a.stress);
+});
+
+test('cargo: building parts give 20', () => {
+
+
+  assert.strictEqual(globalThis.MT.CONFIG.cargoOptions.parts.give.parts, 20);
 });
 
 test('meteor showers: forecast, then damage risk; May 2024 has the real Eta Aquariids', () => {
@@ -316,13 +528,14 @@ test('APOD feed: picks the newest IMAGE post, asks for a smaller copy, strips HT
   assert.strictEqual(globalThis.MT.APOD._pick([{ media_type: 'image', hdurl: 'javascript:alert(1)' }]), null, 'only https images');
 });
 
-test('first built tower shows today; later towers show the archive', () => {
+test('tower visits are counted across all towers (only visit 1 shows today\'s picture)', () => {
   const st = S.create({ scenario: 'training', seed: 4 });
-  const a = S.place(st, 'tower', 4, 4).m, b = S.place(st, 'tower', 5, 4).m;
-  assert.strictEqual(S.firstTower(st), null, 'nothing built yet');
+  const a = S.place(st, 'tower', 4, 4, 1).m, b = S.place(st, 'tower', 5, 4, 2).m;
   while (!a.built || !b.built) S.step(st);
-  assert.strictEqual(S.firstTower(st), a);
+  assert.strictEqual(S.useTower(st, b.id, 3).visit, 1, 'whichever tower is used first');
+  assert.strictEqual(S.useTower(st, a.id, 4).visit, 2);
 });
+
 
 test('archive picture: random week between 1995-06-16 and the day before today, skips videos and placeholders', async () => {
   require(path.join(__dirname, '../js/apod.js'));

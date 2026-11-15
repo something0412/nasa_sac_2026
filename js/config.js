@@ -7,13 +7,20 @@
   MT.CONFIG = {
     missionHours: 720, // 30 days
     crew: 4,
-    // Every job (new building, repair, moon-dirt shield) gets exactly ONE astronaut. At most this many
-    // astronauts work outside at the same time; the rest stay in the habitat.
-    maxOutside: 2,
+    // Every job (new building, repair, moon-dirt shield) gets exactly ONE astronaut: the Engineer the player
+    // picked. The player always picks an astronaut first, then what they should build or use.
 
     // ----- Astronaut Management System (AMS): per-astronaut Health, Stress and Bone density -----
     astro: {
       names: ['Astronaut 1', 'Astronaut 2', 'Astronaut 3', 'Astronaut 4'],
+      // ROLES: only Engineers build and repair, only the Scientist uses the Research Bay,
+      // only the Botanist works in the greenhouse. Anyone can use the Astronomy Tower and Fitness Center.
+      roles: ['engineer', 'engineer', 'scientist', 'botanist'],
+      roleInfo: {
+        engineer: { name: 'Engineer', icon: '🔧', color: '#ffb35c', does: 'builds and repairs' },
+        scientist: { name: 'Scientist', icon: '🔬', color: '#6fd3ff', does: 'researches upgrades in the Research Bay' },
+        botanist: { name: 'Botanist', icon: '🌱', color: '#7fe08a', does: 'tends the greenhouse (2x food for 1 day)' },
+      },
       // HEALTH (HP 0-100) = radiation received over the whole session, plus injuries. Never restored.
       // REAL: NASA's career radiation limit is 600 mSv (NASA-STD-3001, 2022), so 600 mSv = the whole bar.
       // Living in the habitat (50% blocked) that takes ~880 days (~2.4 years); with the moon-dirt shield ~6 years.
@@ -26,7 +33,11 @@
         stormShelterPerH: 0.1, // GAME: the shelter is cramped but safe
         meteorOutsidePerH: 6, // GAME: caught outside in a meteor shower
         meteorInsidePerH: 1,
-        towerRelief: 30,      // GAME: everyone's stress drops when a NEW Astronomy Tower is opened for the first time
+        towerRelief: 30,      // GAME: the astronaut who visits an Astronomy Tower feels calmer (just them)
+        towerCooldownH: 12,   // GAME: each tower can be visited again 12 hours later
+        gymReliefPerH: 25,    // GAME: each hour of training lowers stress (a 2-hour session = -50). REAL: NASA counts
+        //                       exercise as a countermeasure for mood and stress on long missions, not just for bones.
+
         slowAt: 75,           // at or above this, an astronaut works at half speed
         slowFactor: 0.5,
       },
@@ -36,8 +47,8 @@
       bone: {
         lossPerH: 1 / 24,
         gymGainPerH: 2,      // each hour in the Fitness Center
-        visitEveryH: 22,     // an astronaut goes to train about once a day...
-        visitH: 2,           // ...for 2 hours (one astronaut per Fitness Center at a time)
+        visitEveryH: 24,     // the AMS shows "Needs training" after this many hours without the gym (the player sends them)
+        visitH: 2,           // a session lasts 2 hours (one astronaut per Fitness Center at a time)
         injuryBelow: 85,     // below this: chance of a small injury (sprain) each hour
         injuryChancePerH: 0.03,
         injuryHp: 3,
@@ -59,13 +70,42 @@
 
     // ----- weather events that can damage buildings -----
     damage: {
-      canBreak: ['solar', 'o2gen', 'drill', 'greenhouse', 'gym', 'tower'],
+      canBreak: ['solar', 'o2gen', 'drill', 'greenhouse', 'gym', 'tower', 'lab'],
       stormChance: 0.08,         // GAME: chance per building each time a radiation storm (or a new wave) starts: electronics glitch
       meteorChancePerH: 0.04,    // GAME: chance per building per hour of meteor shower
-      brokenRate: 0.5,           // damaged buildings make things at half speed (towers and gyms can't be used at all)
+      brokenRate: 0.5,           // damaged buildings make things at half speed (towers, gyms and Research Bays can't be used at all)
       repairCost: 1,             // parts
       repairWork: 0.5,           // repair takes half the work of building it
     },
+    // ----- accidents: random mishaps with machines that cost supplies -----
+    // About one accident every 3-4 days (only working machines; none on day 1).
+    accidents: {
+      chancePerH: 0.012,
+      startH: 24,
+      drill: { water: 25 },              // a pipe freezes and cracks: water leaks out
+      greenhouse: { food: 12 },          // plant disease: crops are thrown away
+      o2gen: { o2: 5 },                  // a valve leaks: stored oxygen escapes
+      // REAL: moondust is electrically charged and sticks to everything (Apollo crews had it on suits,
+      // tools and instruments). A dusty panel makes half power for a day, and shaking it clean uses battery.
+      solar: { battery: 12, dustH: 24, dustFactor: 0.5 },
+    },
+
+    // ----- Research Bay: the Scientist spends 1 day there to research an upgrade -----
+    // Upgrades work only for buildings within `radius` tiles of a working (not damaged) Research Bay.
+    research: {
+      targets: ['solar', 'o2gen', 'drill'],
+      levelBoost: 0.5,       // each level: +50% production
+      maxLevel: 2,           // level 2 = 2x
+      costBase: 2,           // parts for the first upgrade...
+      costStep: 2,           // ...and each upgrade after that costs 2 more (2, 4, 6, 8, ...)
+      hours: 24,             // hours of lab work (the shelter pauses it; radiation inside = like the habitat)
+      radius: 10,            // tiles (100 m), measured centre to centre
+      accidentChancePerH: 0.008, // GAME: rare micro-explosion during an experiment
+      accidentHp: 6,             // same as a small fracture
+    },
+    // ----- Botanist: spends 1 day in a greenhouse; that greenhouse makes 2x food meanwhile -----
+    botany: { hours: 24, mult: 2, accidentChancePerH: 0.008, accidentHp: 6 },
+
     meteor: {
       warnLead: 6,               // REAL: meteor showers are predictable (Earth and Moon cross the same comet dust every year)
       hitChancePerH: 0.3,        // GAME: chance an astronaut caught OUTSIDE is hit by a tiny meteoroid each hour
@@ -144,15 +184,20 @@
       },
       tower: {
         name: 'Astronomy Tower', icon: '🔭', w: 1, h: 1, cost: 2, work: 6, // GAME: no power use yet
-        desc: "A small telescope dome. Click it to see NASA's Astronomy Picture of the Day. The first look through each NEW tower lowers everyone's stress.",
+        desc: "A small telescope dome. Pick an astronaut, then click it: they look at a NASA space picture and their stress drops. Each tower can be used every 12 hours.",
+      },
+      lab: {
+        name: 'Research Bay', icon: '🔬', w: 1, h: 1, cost: 4, work: 10, // GAME: no power use yet
+        desc: 'The Scientist spends 1 day here researching upgrades: nearby Solar Panels, O₂ Generators and Ice Drills work faster (up to 2x). Only buildings within 10 tiles get the boost.',
       },
       gym: {
         name: 'Fitness Center', icon: '🏋️', w: 1, h: 1, cost: 3, work: 8, priority: 5,
         power: 1, // GAME: treadmill + resistance machine; first to shut off when power is low
-        desc: 'Astronauts train here about once a day to keep their bones strong in low gravity. One astronaut at a time.',
+        desc: 'Pick an astronaut and click it to train for 2 hours: keeps bones strong in low gravity and lowers stress. Each astronaut needs this about once a day. One at a time.',
+
       },
     },
-    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower', 'gym'],
+    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower', 'gym', 'lab'],
     bermWork: 36, // crew-hours to pile regolith (moon dirt) on the habitat
 
     // REAL: an adult uses about 0.84 kg O2 and ~1.8 kg food (with packaging) per day (NASA BVAD, NASA/TP-2015-218570).
@@ -194,7 +239,8 @@
     cargoAskLead: 48,
     cargoOptions: {
       food: { name: 'Food pack', icon: '🍞', text: '+60 kg food', give: { food: 60 } },
-      parts: { name: 'Building parts', icon: '🔩', text: '+10 parts', give: { parts: 10 } },
+      parts: { name: 'Building parts', icon: '🔩', text: '+20 parts', give: { parts: 20 } },
+
       life: { name: 'Water & air', icon: '💧', text: '+60 kg water, +15 kg O₂', give: { water: 60, o2: 15 } },
     },
   };

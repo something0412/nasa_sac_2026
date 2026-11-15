@@ -135,7 +135,8 @@
     });
   }
 
-  // Which picture each tower shows, so clicking the same tower again shows the same picture.
+  // Pictures by key. main.js uses one key per tower VISIT, so every visit after the first gets a new
+  // archive picture (usedDates keeps them all different, and never today's picture).
   const towerPictures = new Map(); // key -> Promise<picture>
   function pictureFor(key, archive) {
     if (!archive) return latest();
@@ -315,8 +316,9 @@
   // ---------------------------------------------------------------- view ----
   /**
    * Fill the tower pop-up (root element with the .apod* parts). Returns {destroy}.
-   * opts.archive = false: today's picture (the first tower). true: a random archive picture,
-   * remembered under opts.key (one per tower).
+   * opts.archive = false: today's picture (the first tower visit of the mission). true: a random
+   * archive picture, remembered under opts.key (one per visit).
+
    */
   function show(el, opts) {
     opts = opts || {};

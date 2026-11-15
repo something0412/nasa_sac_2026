@@ -12,12 +12,16 @@
     const C = MT.CONFIG, T = C.map.tile;
     const W = C.map.cols * T, H = C.map.rows * T; // world size
     let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
+    // ZOOM: 1 = normal, 2 = everything twice as big. The camera then sees VW / zoom world pixels across.
+    const ZOOM_MIN = 0.5, ZOOM_MAX = 2.5;
+    let zoom = 1;
+    const vw = () => VW / zoom, vh = () => VH / zoom; // how much of the world fits on screen
     const safe = { left: 0, right: 0, top: 0, bottom: 0 }; // screen edges covered by open panels
     const ctx = canvas.getContext('2d');
     const fctx = forecastCanvas.getContext('2d');
 
     let ground = null, zonePaths = null;
-    const crew = [];
+    let crew = {}; // astronaut id -> where their dot is drawn (world pixels), also used to click on them
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
     let time = 0, dashOffset = 0, frac = 0;
@@ -28,9 +32,9 @@
     // The canvas fills the window. We draw in CSS pixels and scale by the device pixel ratio so it stays sharp.
     function resize(cssW, cssH) {
       // keep the same spot of the Moon in the middle of the screen when the window changes size
-      const midX = cam.x + VW / 2, midY = cam.y + VH / 2;
+      const midX = cam.x + vw() / 2, midY = cam.y + vh() / 2;
       VW = Math.max(200, Math.round(cssW)); VH = Math.max(200, Math.round(cssH));
-      cam.x = midX - VW / 2; cam.y = midY - VH / 2;
+      cam.x = midX - vw() / 2; cam.y = midY - vh() / 2;
       DPR = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(VW * DPR); canvas.height = Math.round(VH * DPR);
       moveTo(cam.x, cam.y);
@@ -38,14 +42,23 @@
     function setSafeArea(a) { Object.assign(safe, a); }
 
     // ---------- camera ----------
-    const clampX = (x) => (W <= VW ? (W - VW) / 2 : Math.max(0, Math.min(W - VW, x))); // centre the world if the screen is bigger
-    const clampY = (y) => (H <= VH ? (H - VH) / 2 : Math.max(0, Math.min(H - VH, y)));
+    const clampX = (x) => (W <= vw() ? (W - vw()) / 2 : Math.max(0, Math.min(W - vw(), x))); // centre the world if the screen is bigger
+    const clampY = (y) => (H <= vh() ? (H - vh()) / 2 : Math.max(0, Math.min(H - vh(), y)));
     function moveTo(x, y) { cam.x = clampX(x); cam.y = clampY(y); cam.flying = false; }
     function flyTo(x, y) { cam.tx = clampX(x); cam.ty = clampY(y); cam.flying = true; }
     // Centre a world point in the part of the screen that is NOT covered by panels.
     function centerOn(wx, wy, smooth) {
-      const sx = (safe.left + VW - safe.right) / 2, sy = (safe.top + VH - safe.bottom) / 2;
-      (smooth ? flyTo : moveTo)(wx - sx, wy - sy);
+      const sx = (safe.left + VW - safe.right) / 2, sy = (safe.top + VH - safe.bottom) / 2; // screen pixels
+      (smooth ? flyTo : moveTo)(wx - sx / zoom, wy - sy / zoom);
+    }
+    // Zoom in (factor > 1) or out (factor < 1), keeping the spot under the mouse in the same place.
+    function zoomAt(evt, factor) {
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * factor));
+      if (next === zoom) return;
+      const p = evt ? toCanvas(evt) : { x: VW / 2, y: VH / 2 };
+      const wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // world point under the mouse
+      zoom = next;
+      moveTo(wx - p.x / zoom, wy - p.y / zoom);
     }
     function centerOnBase(state, smooth) {
       const hab = state.modules.find((m) => m.type === 'hab');
@@ -55,11 +68,11 @@
     // Mouse position → canvas pixels (the canvas is scaled by CSS) → world tile.
     function toCanvas(evt) {
       const rect = canvas.getBoundingClientRect();
-      return { x: ((evt.clientX - rect.left) / rect.width) * VW, y: ((evt.clientY - rect.top) / rect.height) * VH, px: evt.clientX - rect.left, py: evt.clientY - rect.top, scale: VW / rect.width };
+      return { x: ((evt.clientX - rect.left) / rect.width) * VW, y: ((evt.clientY - rect.top) / rect.height) * VH, px: evt.clientX - rect.left, py: evt.clientY - rect.top, scale: VW / rect.width / zoom }; // scale: mouse pixels → world pixels (for dragging)
     }
     function tileAt(evt) {
       const p = toCanvas(evt);
-      return { c: Math.floor((p.x + cam.x) / T), r: Math.floor((p.y + cam.y) / T), px: p.px, py: p.py };
+      return { c: Math.floor((cam.x + p.x / zoom) / T), r: Math.floor((cam.y + p.y / zoom) / T), px: p.px, py: p.py };
     }
     function hitTag(evt) {
       if (!tagRect) return false;
@@ -111,8 +124,7 @@
         g.fillText(f.label, f.u * W, f.v * H);
       }
       ground = off;
-      crew.length = 0;
-      for (let i = 0; i < C.crew; i++) crew.push({ x: 0, y: 0, init: false });
+      crew = {};
     }
 
     // ---------- particles (object pool, no new objects per frame) ----------
@@ -244,11 +256,38 @@
           ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
           ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
           ctx.restore();
-          if (m.built && blink) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); }
+          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          break;
+        }
+        case 'lab': {
+          // Low lab module with a round window; a flask glows (and bubbles) while the Scientist is researching.
+          const busy = state.crew.some((a) => !a.medbay && a.task && a.task.kind === 'lab' && a.task.id === m.id);
+          ctx.fillStyle = '#cfd6e0'; ctx.beginPath(); ctx.roundRect(x + 6, y + 10, w - 12, h - 18, 5); ctx.fill();
+          ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.fillStyle = '#26303f'; ctx.beginPath(); ctx.arc(x + 14, cy + 1, 4.5, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = busy ? '#6fd3ff' : '#4d5868';
+          ctx.beginPath(); ctx.moveTo(cx + 3, cy - 5); ctx.lineTo(cx + 7, cy - 5); ctx.lineTo(cx + 7, cy - 1); ctx.lineTo(cx + 11, cy + 7); ctx.lineTo(cx - 1, cy + 7); ctx.lineTo(cx + 3, cy - 1); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#9aa2af'; ctx.fillRect(cx - 6, y + 4, 2, 7); // antenna
+          if (busy && Math.random() < 0.12) spawn(2, cx + 5 + (Math.random() - 0.5) * 6, cy - 6, 0, -14, 1, '#bdf0ff');
           break;
         }
       }
       ctx.restore();
+
+      // Research boost: small "2x" badge on machines that get an upgrade (close enough to a Research Bay).
+      if (m.built && C.research.targets.includes(m.type)) {
+        const b = MT.Sim.boostOf(state, m);
+        if (b > 1) {
+          ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x + 2, y + 2, 20, 11, 3); ctx.fill();
+          ctx.fillStyle = '#6fd3ff'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(b + 'x', x + 12, y + 10.5);
+        }
+      }
+      // Moondust on a solar panel (accident): brown speckles.
+      if (m.built && m.type === 'solar' && m.dustLeft > 0) {
+        ctx.fillStyle = 'rgba(140,110,70,0.45)'; ctx.fillRect(x + 3, y + 3, w - 6, h - 6);
+        ctx.fillStyle = 'rgba(190,160,110,0.9)';
+        for (let i = 0; i < 9; i++) ctx.fillRect(x + 6 + ((i * 13 + m.id * 7) % (w - 12)), y + 6 + ((i * 7 + m.id * 3) % (h - 12)), 2, 2);
+      }
 
       if (!m.built) {
         const work = C.modules[m.type].work;
@@ -258,7 +297,7 @@
       } else if (!m.on) {
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y, w, h);
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', x + w / 2, y + h / 2 + 4);
-      } else if (m.type !== 'solar' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower' && !m.powered) {
+      } else if (MT.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
         ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fillRect(x, y, w, h);
         if (blink) { ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillText('⚡', x + w - 9, y + 15); }
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
@@ -295,14 +334,14 @@
         const vx = -0.78 * sp, vy = 0.62 * sp; // from the upper right, falling down-left
         const life = 0.55 + Math.random() * 0.9;
         // land somewhere in (or just around) the view
-        const lx = cam.x - 40 + Math.random() * (VW + 80), ly = cam.y - 20 + Math.random() * (VH + 40);
+        const lx = cam.x - 40 + Math.random() * (vw() + 80), ly = cam.y - 20 + Math.random() * (vh() + 40);
         spawn(3, lx - vx * life, ly - vy * life, vx, vy, life, Math.random() < 0.25 ? '#ffd6a0' : '#f2f6ff');
       }
     }
 
     // ---------- "back to base" tag on the edge of the view ----------
     function drawBaseTag(hc) {
-      const sx = hc.x - cam.x, sy = hc.y - cam.y; // base position on screen
+      const sx = (hc.x - cam.x) * zoom, sy = (hc.y - cam.y) * zoom; // base position on screen
       tagRect = null;
       const L = safe.left, R = VW - safe.right, Tp = safe.top, B = VH - safe.bottom; // visible map area
       if (sx > L + 30 && sx < R - 30 && sy > Tp + 30 && sy < B - 30) return; // base is visible
@@ -311,7 +350,7 @@
       const t = Math.min(mx / Math.max(1e-6, Math.abs(dx)), my / Math.max(1e-6, Math.abs(dy)));
       const px = ox + dx * t, py = oy + dy * t;
       const ang = Math.atan2(dy, dx);
-      const dist = Math.round((Math.hypot(sx - VW / 2, sy - VH / 2) / T) * METERS_PER_TILE / 10) * 10;
+      const dist = Math.round((Math.hypot(sx - VW / 2, sy - VH / 2) / zoom / T) * METERS_PER_TILE / 10) * 10;
       const pulse = 0.75 + 0.25 * Math.sin(time * 4);
       ctx.save();
       ctx.translate(px + Math.cos(ang) * 46, py + Math.sin(ang) * 20);
@@ -347,16 +386,18 @@
 
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.fillStyle = '#0b0e15'; ctx.fillRect(0, 0, VW, VH);
-      ctx.setTransform(DPR, 0, 0, DPR, -Math.round(cam.x) * DPR, -Math.round(cam.y) * DPR);
+      const S = DPR * zoom; // world pixels → device pixels
+      ctx.setTransform(S, 0, 0, S, -Math.round(cam.x * S), -Math.round(cam.y * S));
+      const VWz = vw(), VHz = vh(); // the part of the world on screen, in world pixels
       // only copy the part of the ground image the camera can see
       const gx = Math.max(0, Math.floor(cam.x)), gy = Math.max(0, Math.floor(cam.y));
-      const gw = Math.min(W - gx, VW + 2), gh = Math.min(H - gy, VH + 2);
+      const gw = Math.min(W - gx, Math.ceil(VWz) + 2), gh = Math.min(H - gy, Math.ceil(VHz) + 2);
       if (gw > 0 && gh > 0) ctx.drawImage(ground, gx, gy, gw, gh, gx, gy, gw, gh);
 
       // Terrain shadow: each zone gets darker as the Sun slides behind the hills (smooth, follows game time).
       // Only the tiles the camera can see are drawn, so a big map stays fast.
-      const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VW) / T));
-      const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VH) / T));
+      const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VWz) / T));
+      const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VHz) / T));
       const shadeOf = {
         ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
         plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
@@ -398,10 +439,10 @@
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
-        } else if (m.type === 'shelter') { color = '#6b5b45'; }
+        } else if (m.type === 'shelter' || !MT.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
         else { color = !m.on ? '#4a4f5a' : m.powered ? '#ffd36b' : '#ff5d5d'; flow = m.on && m.powered ? -1 : 0; }
         ctx.strokeStyle = color;
-        ctx.setLineDash(flow ? [6, 6] : m.type === 'shelter' ? [2, 4] : [3, 5]);
+        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
       }
@@ -409,18 +450,48 @@
 
       for (const m of state.modules) drawModule(state, m, blink);
 
-      // astronauts: each one walks to where the AMS says they are (job site, gym, shelter or the habitat)
-      const shelter = MT.Sim.built(state, 'shelter')[0];
+      // Research Bay reach (dashed circle): while placing one, hovering one, or with the Scientist picked.
+      const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
+      const hoverM = ui.hover && !ui.buildType ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
+      const rings = [];
+      if (ui.buildType === 'lab' && ui.hover) rings.push({ x: (ui.hover.c + 0.5) * T, y: (ui.hover.r + 0.5) * T });
+      for (const l of MT.Sim.built(state, 'lab')) {
+        if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...center(l), dead: l.damaged });
+      }
+      for (const g of rings) {
+        ctx.beginPath(); ctx.arc(g.x, g.y, C.research.radius * T, 0, Math.PI * 2);
+        ctx.fillStyle = g.dead ? 'rgba(255,93,93,0.04)' : 'rgba(111,211,255,0.06)'; ctx.fill();
+        ctx.setLineDash([8, 6]); ctx.lineDashOffset = dashOffset * 0.5;
+        ctx.strokeStyle = g.dead ? 'rgba(255,93,93,0.6)' : 'rgba(111,211,255,0.75)'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.setLineDash([]); ctx.lineDashOffset = 0;
+      }
+      // The picked Engineer's job sites get a dashed outline in their role colour.
       const jobs = MT.Sim.jobList(state);
+      if (picked) {
+        ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+        for (const j of jobs) if (j.assignee === picked.id) {
+          const m = j.m || habM;
+          ctx.strokeRect(m.c * T - 2, m.r * T - 2, m.w * T + 4, m.h * T + 4);
+        }
+        ctx.setLineDash([]);
+      }
+
+      // astronauts: each one walks to where the AMS says they are (job site, gym, lab, greenhouse, tower, shelter or the habitat)
+      const shelter = MT.Sim.built(state, 'shelter')[0];
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
-      state.crew.forEach((A, i) => {
-        const a = crew[i] || (crew[i] = { x: 0, y: 0, init: false });
+      for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
+      state.crew.forEach((A) => {
+        const i = A.id - 1;
+        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, init: false });
         let tx = hc.x + Math.cos(i * 1.57 + 0.8) * 9, ty = hc.y + Math.sin(i * 1.57 + 0.8) * 9;
         let visible = false;
         if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + i * 6; ty = s.y + 12; visible = true; }
         else if (A.where === 'gym') {
           const g = state.modules.find((m) => m.id === A.gymId);
           if (g) { const gc = center(g); tx = gc.x; ty = gc.y + 13; visible = true; }
+        } else if (A.task && A.where === A.task.kind) { // Research Bay, greenhouse or Astronomy Tower
+          const tm = state.modules.find((m) => m.id === A.task.id);
+          if (tm) { const c = center(tm); tx = c.x + Math.sin(time * 1.5 + i) * 2; ty = c.y + 14; visible = true; }
         } else if (A.where === 'outside') {
           const j = jobs.find((x) => x.key === A.job);
           const jc = j && j.m ? center(j.m) : { x: hc.x + Math.cos(time * 0.4 + i * 3) * 42, y: hc.y + Math.sin(time * 0.4 + i * 3) * 42 };
@@ -429,24 +500,32 @@
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
         if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; } else { a.x = tx; a.y = ty; }
-        if (A.medbay || (!visible && d < 1)) return; // inside the habitat (or medbay): hidden
-        const outside = A.where === 'outside';
+        const sel = picked === A;
+        a.id = A.id;
+        a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
+        if (!a.shown) return; // inside the habitat (or medbay): hidden
+        const exposed = MT.Sim.isExposed(A);
+        if (sel) { // picked: pulsing gold ring
+          ctx.beginPath(); ctx.arc(a.x, a.y, 9 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
+        }
         ctx.beginPath(); ctx.arc(a.x, a.y, 4.5, 0, Math.PI * 2);
-        ctx.fillStyle = outside && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
+        ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
         ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
-        // number tag so you can match the astronaut to the AMS list
+        // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
+        ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
         ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), a.x, a.y - 9.5);
       });
 
       // radiation storm particles stream in from the Sun's direction, across what the camera sees
       if (state.stormRate > C.rad.stormOn) {
         const n = Math.min(6, state.stormRate * 0.6 + 0.5);
-        const vx = cam.x + VW / 2, vy = cam.y + VH / 2;
+        const vx = cam.x + VWz / 2, vy = cam.y + VHz / 2;
         for (let k = 0; k < n; k++) {
           if (Math.random() > 0.5) continue;
-          const perp = (Math.random() - 0.5) * 1.6 * VW;
-          const sx = vx + sv.x * VW * 0.65 - sv.y * perp, sy = vy + sv.y * VW * 0.65 + sv.x * perp;
+          const perp = (Math.random() - 0.5) * 1.6 * VWz;
+          const sx = vx + sv.x * VWz * 0.65 - sv.y * perp, sy = vy + sv.y * VWz * 0.65 + sv.x * perp;
           const sp = 500 + Math.random() * 300;
           spawn(0, sx, sy, -sv.x * sp, -sv.y * sp, 2.2, Math.random() < 0.5 ? 'rgba(255,90,90,0.7)' : 'rgba(255,220,120,0.7)');
         }
@@ -552,12 +631,23 @@
       fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
     }
 
-    function reset() { ground = null; tagRect = null; for (const p of pool) p.alive = false; }
+    function reset() { ground = null; tagRect = null; zoom = 1; for (const p of pool) p.alive = false; }
+    /** The astronaut drawn under the mouse (id), or null. */
+    function crewAt(evt) {
+      const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels
+      let best = null, bd = 11;
+      for (const a of Object.values(crew)) {
+        if (!a.shown) continue;
+        const d = Math.min(Math.hypot(a.x - wx, a.y - wy), Math.hypot(a.x - wx, a.y - 12 - wy)); // the dot or its number tag
+        if (d < bd) { bd = d; best = a.id; }
+      }
+      return best;
+    }
 
     return {
-      draw, drawForecast, tileAt, toCanvas, hitTag, reset, centerOnBase, resize, setSafeArea,
+      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, resize, setSafeArea, zoomAt,
       panStart: () => ({ x: cam.x, y: cam.y }),
-      debug: () => ({ cam: { ...cam }, tag: tagRect, view: [VW, VH], world: [W, H] }),
+      debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
       panTo: (x, y) => moveTo(x, y),
     };
   }

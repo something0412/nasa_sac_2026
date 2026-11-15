@@ -94,6 +94,10 @@
       zoom = next;
       moveTo(wx - p.x / zoom, wy - p.y / zoom);
     }
+    /** Look at a grid point (c, r can be fractions). */
+    function centerOnTile(c, r, smooth) { centerOn(c * T, r * T, smooth); }
+    /** Where a grid point is on the screen right now (pixels from the map's top-left corner). */
+    function screenOf(c, r) { return { x: (c * T - cam.x) * zoom, y: (r * T - cam.y) * zoom }; }
     function centerOnBase(state, smooth) {
       const hab = state.modules.find((m) => m.type === 'hab');
       centerOn((hab.c + hab.w / 2) * T, (hab.r + hab.h / 2) * T, smooth);
@@ -191,8 +195,9 @@
       if (!m.built) ctx.globalAlpha = 0.45;
       switch (m.type) {
         case 'hab': {
-          if (state.berm.built || state.berm.building) {
-            const f = state.berm.built ? 1 : state.berm.progress / C.bermWork;
+          const BM = m.berm || { built: false, building: false }; // each HAB has its own moon-dirt shield
+          if (BM.built || BM.building) {
+            const f = BM.built ? 1 : BM.progress / C.bermWork;
             ctx.beginPath(); ctx.arc(cx, cy, 38, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
             ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 9; ctx.stroke();
           }
@@ -202,10 +207,11 @@
           ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI * 2); ctx.strokeStyle = '#aab1bd'; ctx.stroke();
           for (let i = 0; i < 6; i++) {
             const a = (i / 6) * Math.PI * 2 + 0.3;
-            ctx.fillStyle = on ? (state.habTemp < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
+            ctx.fillStyle = on ? ((m.temp != null ? m.temp : state.habTemp) < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
             ctx.fillRect(cx + Math.cos(a) * 25 - 3, cy + Math.sin(a) * 25 - 3, 6, 6);
           }
-          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('HAB', cx, cy + 4);
+          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+          ctx.fillText(LW.Sim.habs(state).length > 1 && m.built ? LW.Sim.habName(state, m) : 'HAB', cx, cy + 4);
           break;
         }
         case 'solar': {
@@ -288,6 +294,20 @@
           ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
           ctx.restore();
           if (m.built && blink && !LW.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          break;
+        }
+        case 'pad': {
+          // Landing Pad: round platform with an "H" and corner lights (blinking = ready for a spaceship).
+          const ready = m.built && LW.Sim.landingSpots(state).some((sp) => sp.pad === m);
+          ctx.fillStyle = '#5d5f66'; ctx.beginPath(); ctx.arc(cx, cy, 34, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 2; ctx.stroke();
+          ctx.strokeStyle = '#d9dde4'; ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.arc(cx, cy, 26, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+          ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 24px system-ui'; ctx.textAlign = 'center'; ctx.fillText('H', cx, cy + 8);
+          for (let k = 0; k < 4; k++) {
+            const a = Math.PI / 4 + (k * Math.PI) / 2;
+            ctx.fillStyle = ready ? (blink ? '#5fe08a' : '#2e6b43') : '#59636f';
+            ctx.beginPath(); ctx.arc(cx + Math.cos(a) * 31, cy + Math.sin(a) * 31, 2.5, 0, Math.PI * 2); ctx.fill();
+          }
           break;
         }
         case 'lab': {
@@ -414,6 +434,9 @@
       const blink = Math.floor(time * 2.5) % 2 === 0;
       const habM = state.modules.find((m) => m.type === 'hab');
       const hc = center(habM);
+      const habCs = LW.Sim.habs(state).map(center);
+      const nearestHab = (p) => habCs.reduce((b, h) => (Math.hypot(h.x - p.x, h.y - p.y) < Math.hypot(b.x - p.x, b.y - p.y) ? h : b), hc);
+
 
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.fillStyle = '#0b0e15'; ctx.fillRect(0, 0, VW, VH);
@@ -446,7 +469,7 @@
       // as the Sun sinks behind a hill they stretch and fade out.
       const sv = sunVec(state);
       for (const m of state.modules) {
-        if (!m.built) continue;
+        if (!m.built || m.type === 'pad') continue; // (flat pads cast no shadow)
         const L = lightAt(state, m);
         if (L < 0.02) continue;
         const pad = m.type === 'hab' ? 10 : 8;
@@ -463,7 +486,7 @@
       // power cables: yellow moving dashes = power flowing, red = no power
       ctx.lineWidth = 2;
       for (const m of state.modules) {
-        if (m.type === 'hab' || !m.built) continue;
+        if (!m.built || m === habM) continue; // (extra HABs get a cable to HAB 1)
         const c = center(m);
         let color, flow = 0;
         if (m.type === 'solar') { const on = m.light > 0.02 && m.on; color = on ? '#ffd36b' : '#4a4f5a'; flow = on ? 1 : 0; }
@@ -475,7 +498,8 @@
         ctx.strokeStyle = color;
         ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !LW.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
-        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
+        const to = m.type === 'hab' ? hc : nearestHab(c);
+        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(to.x, to.y); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
 
@@ -488,6 +512,22 @@
       if (ui.buildType === 'lab' && ui.hover) rings.push({ x: (ui.hover.c + 0.5) * T, y: (ui.hover.r + 0.5) * T });
       for (const l of LW.Sim.built(state, 'lab')) {
         if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...center(l), dead: l.damaged });
+      }
+      // Placing a Landing Pad: gold circles show how close to a HAB it must be.
+      if (ui.buildType === 'pad') {
+        ctx.setLineDash([8, 6]); ctx.lineDashOffset = dashOffset * 0.5; ctx.lineWidth = 2;
+        for (const H of state.modules) if (H.type === 'hab') {
+          const c = center(H);
+          ctx.beginPath(); ctx.arc(c.x, c.y, C.pad.radius * T, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,211,107,0.06)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,211,107,0.8)'; ctx.stroke();
+        }
+        // Red circles: no new pad may go inside another pad's area.
+        for (const P2 of state.modules) if (P2.type === 'pad') {
+          const c = center(P2);
+          ctx.beginPath(); ctx.arc(c.x, c.y, C.pad.radius * T, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,93,93,0.07)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,93,93,0.8)'; ctx.stroke();
+        }
+        ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       for (const g of rings) {
         ctx.beginPath(); ctx.arc(g.x, g.y, C.research.radius * T, 0, Math.PI * 2);
@@ -507,16 +547,22 @@
         ctx.setLineDash([]);
       }
 
-      // astronauts: each one walks to where the AMS says they are (job site, gym, lab, greenhouse, tower, shelter or the habitat)
-      const shelter = LW.Sim.built(state, 'shelter')[0];
+      drawRover(state);
+
+      // astronauts: each one walks to where the AMS says they are (job site, gym, lab, greenhouse, tower, shelter or their HAB)
+      const shelters = LW.Sim.built(state, 'shelter');
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
         const i = A.id - 1;
         const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2, init: false }); // dir: way the visor faces
-        let tx = hc.x + Math.cos(i * 1.57 + 0.8) * 9, ty = hc.y + Math.sin(i * 1.57 + 0.8) * 9;
+        if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
+        const homeC = center(LW.Sim.homeOf(state, A));
+        let tx = homeC.x + Math.cos(i * 1.57 + 0.8) * 9, ty = homeC.y + Math.sin(i * 1.57 + 0.8) * 9;
         let visible = false;
-        if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + i * 6; ty = s.y + 12; visible = true; }
+        // Shelter: the one closest to their HAB.
+        const shelter = shelters.reduce((b, s) => (!b || Math.hypot(center(s).x - homeC.x, center(s).y - homeC.y) < Math.hypot(center(b).x - homeC.x, center(b).y - homeC.y) ? s : b), null);
+        if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + (i % 4) * 6; ty = s.y + 12; visible = true; }
         else if (A.where === 'gym') {
           const g = state.modules.find((m) => m.id === A.gymId);
           if (g) { const gc = center(g); tx = gc.x; ty = gc.y + 13; visible = true; }
@@ -525,7 +571,8 @@
           if (tm) { const c = center(tm); tx = c.x + Math.sin(time * 1.5 + i) * 2; ty = c.y + 14; visible = true; }
         } else if (A.where === 'outside') {
           const j = jobs.find((x) => x.key === A.job);
-          const jc = j && j.m ? center(j.m) : { x: hc.x + Math.cos(time * 0.4 + i * 3) * 42, y: hc.y + Math.sin(time * 0.4 + i * 3) * 42 };
+          const bc = j && j.m ? center(j.m) : homeC; // moon-dirt shield: walk around that HAB
+          const jc = j && j.m && j.kind !== 'berm' ? center(j.m) : { x: bc.x + Math.cos(time * 0.4 + i * 3) * 42, y: bc.y + Math.sin(time * 0.4 + i * 3) * 42 };
           tx = jc.x + Math.sin(time * 3 + i) * 3; ty = jc.y + 15; visible = true;
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
@@ -630,10 +677,38 @@
       drawBaseTag(hc);
     }
 
+    // ---------- the rover (TEMPORARY model: a box on 4 wheels, to be replaced with better art later) ----------
+    // Parked next to its HAB; while driving it moves smoothly from one HAB to the other.
+    function roverAt(state) {
+      const rv = state.rover;
+      if (!rv) return null;
+      const parked = (id) => { const H = state.modules.find((m) => m.id === id); const c = center(H); return { x: c.x + T * 1.3, y: c.y + T * 1.2 }; };
+      if (!rv.trip) return { ...parked(rv.habId), ang: 0, moving: false };
+      const a = parked(rv.trip.from), b = parked(rv.trip.to);
+      const t = Math.max(0, Math.min(1, (rv.trip.total - rv.trip.left + frac) / rv.trip.total)), e = t * t * (3 - 2 * t);
+      return { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, ang: Math.atan2(b.y - a.y, b.x - a.x), moving: true, riders: rv.trip.crew.length };
+    }
+    function drawRover(state) {
+      const p = roverAt(state);
+      if (!p) return;
+      if (p.moving && Math.random() < 0.5) spawn(1, p.x - Math.cos(p.ang) * 9, p.y - Math.sin(p.ang) * 9, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, 0.6, 'rgba(200,200,205,0.7)');
+      ctx.save();
+      ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+      ctx.fillStyle = '#2b2f36';
+      for (const [wx, wy] of [[-6, -6], [3, -6], [-6, 4], [3, 4]]) ctx.fillRect(wx, wy, 4, 2.5); // wheels
+      ctx.fillStyle = '#e8c547'; ctx.fillRect(-7, -4, 14, 8); // body
+      ctx.fillStyle = '#7fd0ff'; ctx.fillRect(2, -3, 4, 6);    // window
+      ctx.strokeStyle = '#c9d1dc'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(-7, -9); ctx.stroke(); // antenna
+      ctx.restore();
+      if (p.riders) { ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText('👩‍🚀' + p.riders, p.x, p.y - 10); }
+    }
+
     // ---------- sunlight forecast strip (redrawn once per game hour) ----------
     // Slim version that lives in the top bar: two 11-px rows + day labels, 40 px tall in total.
+    // The game is endless, so the strip shows a 30-day window: 3 days back, the rest ahead.
     function drawForecast(state) {
-      const cw = forecastCanvas.width, ch = forecastCanvas.height, left = 70, w = cw - left - 8, total = C.missionHours;
+      const cw = forecastCanvas.width, ch = forecastCanvas.height, left = 70, w = cw - left - 8, total = C.chunkH;
+      const ws = Math.max(0, state.hour - 72), X = (h) => left + ((h - ws) / total) * w; // window start, hour → x
       fctx.clearRect(0, 0, cw, ch);
       const rows = [['ridge', 'High ground'], ['plain', 'Plain']];
       const dark = [44, 52, 69], sun = [255, 211, 107];
@@ -641,29 +716,32 @@
       rows.forEach(([z, label], i) => {
         const y = top + i * (rowH + gap);
         fctx.fillStyle = '#c9d1dc'; fctx.font = '10px system-ui'; fctx.textAlign = 'left'; fctx.fillText(label, 2, y + 9);
-        for (let h = 0; h < total; h++) {
+        for (let h = ws; h < ws + total; h++) {
           let c = mix(dark, sun, LW.Sim.zoneLight(state, z, h + 0.5));
           if (h < state.hour) c = mix(c, [16, 20, 28], 0.5); // the past is dimmed
           fctx.fillStyle = rgb(c);
-          fctx.fillRect(left + (h / total) * w, y, w / total + 0.6, rowH);
+          fctx.fillRect(X(h), y, w / total + 0.6, rowH);
         }
       });
       const rowsBottom = top + 2 * rowH + gap;
       fctx.fillStyle = '#8b93a1'; fctx.font = '9px system-ui'; fctx.textAlign = 'center';
-      for (let d = 0; d <= 30; d += 5) {
-        const x = left + ((d * 24) / total) * w;
+      for (let d = Math.ceil(ws / 24 / 5) * 5; d * 24 <= ws + total; d += 5) {
+        const x = X(d * 24);
         fctx.fillRect(x, rowsBottom + 1, 1, 3);
-        if (d) fctx.fillText('Day ' + d, Math.min(x, cw - 18), ch - 3);
+        if (d) fctx.fillText('Day ' + d, Math.min(Math.max(x, left + 14), cw - 18), ch - 3);
       }
-      for (const s of state.storms) if (s.warned) {
-        const x = left + (s.h / total) * w;
-        fctx.fillStyle = '#ff5d5d'; fctx.fillRect(x - 1, top, 2, rowsBottom - top);
+      const inWin = (h) => h >= ws && h < ws + total;
+      for (const s of state.storms) if (s.warned && inWin(s.h)) {
+        fctx.fillStyle = '#ff5d5d'; fctx.fillRect(X(s.h) - 1, top, 2, rowsBottom - top);
       }
-      for (const s of state.meteors || []) if (s.warned) { // meteor showers: purple band once forecast
+      for (const s of state.meteors || []) if (s.warned && inWin(s.h)) { // meteor showers: purple band once forecast
         fctx.fillStyle = 'rgba(190,140,255,0.85)';
-        fctx.fillRect(left + (s.h / total) * w, top, Math.max(2, (s.dur / total) * w), rowsBottom - top);
+        fctx.fillRect(X(s.h), top, Math.max(2, (s.dur / total) * w), rowsBottom - top);
       }
-      const nx = left + (state.hour / total) * w;
+      for (const s of state.ships || []) if (s.warned && inWin(s.h)) { // crew spaceship: gold marker
+        fctx.fillStyle = '#ffd36b'; fctx.fillRect(X(s.h) - 1.5, top, 3, rowsBottom - top);
+      }
+      const nx = X(state.hour);
       fctx.fillStyle = '#ffffff';
       fctx.fillRect(nx - 0.5, top, 1.5, rowsBottom - top);
       fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
@@ -683,7 +761,7 @@
     }
 
     return {
-      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, resize, setSafeArea, zoomAt,
+      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
       panTo: (x, y) => moveTo(x, y),

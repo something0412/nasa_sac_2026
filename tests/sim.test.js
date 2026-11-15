@@ -11,10 +11,12 @@ require(path.join(__dirname, '../js/config.js'));
 require(path.join(__dirname, '../js/sim.js'));
 const S = globalThis.LW.Sim;
 
-function play(scenario, seed, setup, each) {
+// The game is endless, so a test plays until the base closes or `hours` have passed (default: 30 days).
+function play(scenario, seed, setup, each, hours) {
   const st = S.create({ scenario, seed });
   if (setup) setup(st);
-  while (st.status === 'running') {
+  const until = hours || 720;
+  while (st.status === 'running' && st.hour < until) {
     const ev = S.step(st);
     for (const e of ev) if (e.decision === 'cargo') S.chooseCargo(st, e.cargoIndex, 'food');
     if (each) each(st, ev);
@@ -52,26 +54,27 @@ const shelterBot = (st, ev) => {
 test('real May 2024 data is loaded and lines up with the mission', () => {
   const st = S.create({ scenario: 'history', seed: 1 });
   assert.ok(st.flares.length > 20);
-  assert.strictEqual(st.storms.length, 4);
+  assert.strictEqual(st.storms.filter((s) => s.h < 720).length, 4, 'the 4 real storms of May 2024 (random weather after day 30)');
   assert.ok(st.storms.some((s) => s.strong), 'the 2024-05-11 storm (>100 MeV) is strong');
 });
 
 test('doing nothing fails in the first long shadow (habitat gets cold)', () => {
-  const st = play('history', 1);
-  assert.strictEqual(st.status, 'lost');
-  assert.strictEqual(st.failure.cause, 'cold');
+  const st = play('history', 1, null, null, 3000);
+  assert.strictEqual(st.status, 'lost', 'the cold sends everyone home');
+  assert.strictEqual(st.failure.reason, 'cold');
   const d = S.debrief(st);
   assert.ok(d.chain.some((c) => /battery ran empty/i.test(c.text)), 'debrief explains the battery step');
 });
 
 test('no ice drill → runs out of water', () => {
-  const st = play('history', 1, (s) => { build(s, 'solar', 'ridge'); build(s, 'solar', 'ridge'); build(s, 'battery', 'plain'); build(s, 'battery', 'plain'); });
-  assert.strictEqual(st.failure && st.failure.cause, 'water');
+  const st = play('history', 1, (s) => { build(s, 'solar', 'ridge'); build(s, 'solar', 'ridge'); build(s, 'battery', 'plain'); build(s, 'battery', 'plain'); }, null, 3000);
+  assert.strictEqual(st.failure && st.failure.reason, 'water', 'water ran out first');
+  assert.ok(S.debrief(st).chain.some((c) => /water tank ran dry/.test(c.text)));
 });
 
 test('a sensible plan wins, in history and in several random missions', () => {
-  assert.strictEqual(play('history', 1, goodSetup, shelterBot).status, 'won');
-  for (let seed = 1; seed <= 8; seed++) assert.strictEqual(play('training', seed, goodSetup, shelterBot).status, 'won', 'seed ' + seed);
+  assert.strictEqual(play('history', 1, goodSetup, shelterBot).status, 'running', 'still going after 30 days');
+  for (let seed = 1; seed <= 8; seed++) assert.strictEqual(play('training', seed, goodSetup, shelterBot).status, 'running', 'seed ' + seed);
 });
 
 test('the shelter cuts storm radiation a lot', () => {
@@ -87,7 +90,8 @@ test('May 2024 storm radiation is the real LRO measurement, hour by hour', () =>
   assert.strictEqual(Math.floor(peakHour / 24) + 1, 14, 'LRO saw the highest dose rate on 14 May 2024');
   // Real May 2024 was survivable even without the shelter, but the shelter still cuts the dose.
   const ignored = play('history', 1, goodSetup);
-  assert.strictEqual(ignored.status, 'won');
+  assert.strictEqual(ignored.status, 'running');
+
   assert.ok(ignored.crew.length === 4 && ignored.crew.every((a) => !a.medbay), 'nobody is sent home in May 2024: ' + ignored.crew.map((a) => Math.round(a.hp)).join(','));
 });
 
@@ -95,7 +99,8 @@ test('training storms are copies of real recorded storms, and a big one needs th
   for (let seed = 1; seed <= 8; seed++) {
     const st = S.create({ scenario: 'training', seed });
     assert.ok(st.storms.every((s) => s.profile && s.realName), 'seed ' + seed + ' uses real storm shapes');
-    assert.strictEqual(st.storms.filter((s) => s.strong).length, 1, 'exactly one big storm');
+    assert.strictEqual(st.storms.filter((s) => s.strong && s.h < 720).length, 1, 'exactly one big storm in each 30 days');
+    assert.strictEqual(st.storms.filter((s) => s.strong && s.h >= 720 && s.h < 1440).length, 1, 'and in the next 30 days too');
     const ignored = play('training', seed, goodSetup);
     const lost = ignored.failure && ignored.failure.cause === 'crew';
     const best = Math.max(...ignored.crew.map((a) => a.hp));
@@ -448,9 +453,208 @@ test('Fitness Center: a 2-hour session lowers stress too', () => {
   assert.ok(Math.abs(a.stress - (60 - C.astro.bone.visitH * C.astro.stress.gymReliefPerH)) < 1e-9, 'stress ' + a.stress);
 });
 
+// ---------------- endless game: crew ships, new HABs, rover ----------------
+test('endless: no win after 30 days; weather, sunlight forecast and cargo keep coming', () => {
+  const st = play('training', 2, goodSetup, shelterBot, 24 * 40);
+  assert.strictEqual(st.status, 'running', 'still running on day 40');
+  assert.ok(st.light.plain.length >= st.hour + 720, 'sunlight forecast stays 30 days ahead');
+  assert.ok(st.storms.some((s) => s.h > 720 && s.h < 1440), 'new storms after day 30');
+  assert.ok(st.cargo.filter((k) => k.arrived).length >= 3, 'cargo every 10 days');
+});
+
+test('running out of oxygen hurts the crew until they are sent home (the only way the game ends)', () => {
+  const st = S.create({ scenario: 'training', seed: 4 });
+  const E = globalThis.LW.CONFIG.endless.harm;
+  st.res.o2 = 0; st.modules.forEach((m) => { if (m.type === 'o2gen') m.on = false; });
+  S.step(st);
+  assert.strictEqual(st.status, 'running', 'no instant game over any more');
+  assert.ok(Math.abs(st.crew[0].injury - E.noO2PerH) < 1e-9, 'lost health instead');
+  let guard = 0;
+  while (st.status === 'running' && guard++ < 200) { st.res.o2 = 0; S.step(st); }
+  assert.strictEqual(st.status, 'lost');
+  assert.strictEqual(st.failure.reason, 'o2');
+  assert.strictEqual(st.sentHome.length, 4);
+});
+
+// Finish a building right away (tests only): an Engineer is assigned, then it is marked built.
+function instant(st, type, c, r) {
+  st.res.parts += 50;
+  const res = S.place(st, type, c, r, 1);
+  assert.ok(res.ok, `place ${type} at ${c},${r}: ${res.why}`);
+  res.m.built = true; res.m.progress = globalThis.LW.CONFIG.modules[type].work;
+  return res.m;
+}
+/** A free spot about `from` squares left of the base where a 2x2 HAB fits. */
+function farHab(st, from) {
+  const B = globalThis.LW.CONFIG.base;
+  const parts = st.res.parts; st.res.parts = 999; // (only looking for room, not paying)
+  try { for (let dc = from || 30; dc < 45; dc++) if (S.canPlace(st, 'hab', B.c - dc, B.r).ok) return { c: B.c - dc, r: B.r }; } finally { st.res.parts = parts; }
+  assert.fail('no far HAB spot');
+}
+/** A free 2x2 Landing Pad spot within reach of HAB H. */
+function padSpot(st, H) {
+  const parts = st.res.parts; st.res.parts = 999;
+  try { for (let dr = -5; dr <= 5; dr++) for (let dc = -5; dc <= 5; dc++) if (S.canPlace(st, 'pad', H.c + dc, H.r + dr).ok) return { c: H.c + dc, r: H.r + dr }; } finally { st.res.parts = parts; }
+  assert.fail('no pad spot');
+}
+/** Step to the hour the first crew spaceship comes, keeping everyone alive. */
+function untilShip(st) {
+  const E = globalThis.LW.CONFIG.endless;
+  st.hour = E.shipEveryH - E.shipWarnH - 2; S.extendWorld(st);
+  const seen = { warn: null, land: null, events: [] };
+  while (!st.ships[0].arrived) {
+    const ev = S.step(st);
+    for (const e of ev) {
+      if (/spaceship is on the way/.test(e.title)) { seen.warn = st.hour; seen.warnText = e.text; }
+      if (/spaceship (has landed|could not land)/.test(e.title)) { seen.land = st.hour; seen.events.push(e); }
+    }
+    st.res.o2 = 30; st.res.food = 60; st.res.water = 150; st.res.battery = 30; st.crew.forEach((a) => { a.injury = 0; a.wounds = []; });
+  }
+  return seen;
+}
+
+test('HABs and Landing Pads are built (15 and 10 parts); pads must be close to a HAB; the rover costs 15', () => {
+  const C = globalThis.LW.CONFIG;
+  assert.strictEqual(C.modules.hab.cost, 15); assert.strictEqual(C.modules.pad.cost, 10); assert.strictEqual(C.rover.cost, 15);
+  const st = S.create({ scenario: 'training', seed: 2 });
+  st.res.parts = 100;
+  const spot = farHab(st);
+  assert.strictEqual(S.place(st, 'hab', spot.c, spot.r, 3).ok, false, 'only Engineers build HABs');
+  const r = S.place(st, 'hab', spot.c, spot.r, 1);
+  assert.ok(r.ok && !r.m.built, 'a HAB is a building job for an Engineer');
+  const H1 = S.habs(st)[0];
+  // Far from every HAB: refused.
+  let lonely = null;
+  for (let r2 = 2; r2 < 50 && !lonely; r2++) for (let c2 = 2; c2 < 75 && !lonely; c2++) {
+    const near = st.modules.some((m) => m.type === 'hab' && Math.hypot(m.c + 1 - (c2 + 1), m.r + 1 - (r2 + 1)) <= C.pad.radius + 3);
+    if (!near && S.canPlace(st, 'solar', c2, r2).ok && S.canPlace(st, 'solar', c2 + 1, r2 + 1).ok) lonely = { c: c2, r: r2 };
+  }
+  assert.strictEqual(S.canPlace(st, 'pad', lonely.c, lonely.r).ok, false, 'too far from a HAB');
+  const p = padSpot(st, H1);
+  assert.ok(S.place(st, 'pad', p.c, p.r, 2).ok, 'next to HAB 1: fine');
+});
+
+test('crew spaceship: lands only on a Landing Pad next to a finished HAB; the player picks jobs and the home HAB', () => {
+  const E = globalThis.LW.CONFIG.endless;
+  const st = S.create({ scenario: 'training', seed: 1 });
+  st.medbayUses = 2;
+  const H1 = S.habs(st)[0], p = padSpot(st, H1);
+  instant(st, 'pad', p.c, p.r);
+  const s = farHab(st), H2 = instant(st, 'hab', s.c, s.r);
+  const seen = untilShip(st);
+  assert.strictEqual(seen.land - seen.warn, E.shipWarnH, 'warned 5 days ahead');
+  assert.strictEqual(seen.land, E.shipEveryH);
+  assert.ok(seen.events[0].ship, 'it landed');
+  assert.strictEqual(st.medbayUses, 0, 'medical supplies restocked');
+  assert.strictEqual(st.pendingCrew, 2);
+  assert.deepStrictEqual(seen.events[0].pads, [st.modules.find((m) => m.type === 'pad').id], 'one ready pad');
+  const added = S.joinCrew(st, ['scientist', 'botanist'], seen.events[0].padId);
+  assert.deepStrictEqual(added.map((a) => [a.name, a.role]), [['Astronaut 5', 'scientist'], ['Astronaut 6', 'botanist']]);
+  assert.ok(added.every((a) => a.homeId === H1.id), 'they live in the HAB closest to their pad (HAB 1), not HAB 2');
+  assert.strictEqual(S.crewSummary(st).total, 6);
+  assert.strictEqual(S.habName(st, H2), 'HAB 2');
+});
+
+test('Landing Pads: no two within the same radius; landing on a pad makes its closest HAB the home of the new crew', () => {
+  const C = globalThis.LW.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 4 });
+  const H1 = S.habs(st)[0], p1 = padSpot(st, H1);
+  const P1 = instant(st, 'pad', p1.c, p1.r);
+  st.res.parts = 100;
+  // Every spot within the radius of pad 1 is refused, even if it is next to the HAB.
+  for (let dr = -6; dr <= 6; dr++) for (let dc = -6; dc <= 6; dc++) {
+    const c = P1.c + dc, r = P1.r + dr;
+    if (Math.hypot(dc, dr) <= C.pad.radius) assert.strictEqual(S.canPlace(st, 'pad', c, r).ok, false, `too close at ${dc},${dr}`);
+  }
+  // A second HAB far away gets its own pad.
+  const s2 = farHab(st), H2 = instant(st, 'hab', s2.c, s2.r), p2 = padSpot(st, H2);
+  const P2 = instant(st, 'pad', p2.c, p2.r);
+  const seen = untilShip(st);
+  assert.deepStrictEqual(seen.events[0].pads.slice().sort(), [P1.id, P2.id].sort(), 'both pads are ready: the player picks one');
+  assert.strictEqual(S.homeForPad(st, P2.id), H2);
+  const added = S.joinCrew(st, ['engineer', 'engineer'], P2.id);
+  assert.ok(added.every((a) => a.homeId === H2.id), 'landed on the pad by HAB 2, so they live in HAB 2');
+});
+
+test('crew spaceship: no Landing Pad next to a finished HAB = it turns back (no crew, no medbay restock)', () => {
+  const st = S.create({ scenario: 'training', seed: 1 });
+  st.medbayUses = 2;
+  const seen = untilShip(st);
+  assert.match(seen.warnText, /needs a Landing Pad/, 'the warning tells you to build one');
+  assert.match(seen.events[0].title, /could not land/);
+  assert.ok(st.ships[0].missed);
+  assert.strictEqual(st.pendingCrew, 0);
+  assert.strictEqual(st.medbayUses, 2, 'no restock');
+  // A pad next to an UNFINISHED HAB does not count either.
+  const st2 = S.create({ scenario: 'training', seed: 2 });
+  const s = farHab(st2);
+  st2.res.parts = 100;
+  const H = S.place(st2, 'hab', s.c, s.r, 1).m; // still being built
+  const p = padSpot(st2, H);
+  instant(st2, 'pad', p.c, p.r);
+  assert.strictEqual(S.landingSpots(st2).length, 0, 'the HAB must be finished');
+  H.built = true;
+  assert.strictEqual(S.landingSpots(st2).length, 1);
+});
+
+test('each HAB has its own heat and moon-dirt shield', () => {
+  const st = S.create({ scenario: 'training', seed: 2 });
+  const t = freeTile(st, 'plain', 'hab');
+  const H2 = instant(st, 'hab', t.c, t.r);
+  const r = S.startBerm(st, 1, H2.id);
+  assert.ok(r.ok && r.hab === H2);
+  assert.strictEqual(st.berm.building, false, 'HAB 1 untouched');
+  assert.ok(S.startBerm(st, 2).ok, 'HAB 1 shield too (Engineer 2 lives there)');
+  H2.on = false; // no power: it cools down, HAB 1 stays warm
+  for (let i = 0; i < 4; i++) S.step(st);
+  assert.ok(H2.temp < S.habs(st)[0].temp);
+  assert.strictEqual(st.habTemp, H2.temp, 'the Supplies bar shows the coldest HAB');
+});
+
+test('rover: costs 15 parts, carries up to 4 astronauts to another HAB, then stays there', () => {
+  const C = globalThis.LW.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 3 });
+  st.res.parts = 14;
+  assert.strictEqual(S.buyRover(st).ok, false, 'needs 15 parts');
+  st.res.parts = 25;
+  assert.ok(S.buyRover(st).ok); assert.strictEqual(st.res.parts, 10);
+  assert.strictEqual(S.buyRover(st).ok, false, 'only one rover');
+  const H1 = S.habs(st)[0];
+  assert.strictEqual(S.startTrip(st, H1.id, [1]).ok, false, 'needs another HAB');
+  const far = farHab(st); // about 30 squares away, so the drive takes a few hours
+  const H2 = instant(st, 'hab', far.c, far.r);
+  assert.strictEqual(S.startTrip(st, H2.id, [1, 2, 3, 4, 5]).ok, false, '4 seats');
+  const r = S.startTrip(st, H2.id, [1, 3]);
+  assert.ok(r.ok && r.hours >= 2, 'hours ' + r.hours);
+  S.step(st);
+  assert.strictEqual(st.crew[0].where, 'rover');
+  assert.strictEqual(S.useTower(st, 1, 1).ok, false, 'busy in the rover');
+  for (let i = 1; i < r.hours; i++) S.step(st);
+  assert.strictEqual(st.rover.trip, null);
+  assert.strictEqual(st.rover.habId, H2.id, 'the rover is now at HAB 2 (that is where the next trip starts)');
+  assert.deepStrictEqual(st.crew.filter((a) => a.homeId === H2.id).map((a) => a.id), [1, 3]);
+  assert.deepStrictEqual(S.roverRiders(st).map((a) => a.id), [1, 3], 'only people at HAB 2 can get in now');
+  assert.ok(C.rover.seats === 4);
+});
+
+test('rover: fully shielded, so riders get no radiation even during a strong storm', () => {
+  const st = S.create({ scenario: 'training', seed: 5 });
+  st.res.parts = 30; S.buyRover(st);
+  const far = farHab(st);
+  const H2 = instant(st, 'hab', far.c, far.r);
+  st.storms.push({ h: st.hour, strong: true, peak: 20, tau: 12 }); // a strong storm right now
+  const r = S.startTrip(st, H2.id, [1]);
+  assert.ok(r.ok && r.hours >= 2);
+  const rider = st.crew[0], stay = st.crew[1], d0 = rider.dose, s0 = rider.stress, h0 = stay.dose;
+  for (let i = 0; i < r.hours; i++) S.step(st);
+  assert.ok(st.stormRate > 1, 'the storm is on');
+  assert.strictEqual(rider.dose, d0, 'no radiation in the rover');
+  assert.strictEqual(rider.stress, s0, 'no storm stress in the rover');
+  assert.ok(stay.dose > h0, 'the astronaut in the habitat still got some');
+  assert.strictEqual(rider.homeId, H2.id);
+});
+
 test('cargo: building parts give 20', () => {
-
-
   assert.strictEqual(globalThis.LW.CONFIG.cargoOptions.parts.give.parts, 20);
 });
 

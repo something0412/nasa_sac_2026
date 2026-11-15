@@ -7,6 +7,7 @@
 
   const POOL_SIZE = 420;
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
+  const SUIT_LINE = '#1b2230', VISOR = '#1ea5e9'; // astronaut outline and helmet visor (same as render_iso.js)
 
   // A small bowl-shaped crater, lit from the top-left (the ground is drawn once, so the light is fixed).
   // Shared with render_iso.js, which squashes it into an oval (sy = 0.5).
@@ -512,7 +513,7 @@
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
         const i = A.id - 1;
-        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, init: false });
+        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2, init: false }); // dir: way the visor faces
         let tx = hc.x + Math.cos(i * 1.57 + 0.8) * 9, ty = hc.y + Math.sin(i * 1.57 + 0.8) * 9;
         let visible = false;
         if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + i * 6; ty = s.y + 12; visible = true; }
@@ -529,19 +530,26 @@
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
-        if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; } else { a.x = tx; a.y = ty; }
+        if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; a.dir = Math.atan2(dy, dx); } else { a.x = tx; a.y = ty; }
         const sel = picked === A;
         a.id = A.id;
         a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
         const exposed = LW.Sim.isExposed(A);
         if (sel) { // picked: pulsing gold ring
-          ctx.beginPath(); ctx.arc(a.x, a.y, 9 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
+          ctx.beginPath(); ctx.arc(a.x, a.y, 10 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
           ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
         }
-        ctx.beginPath(); ctx.arc(a.x, a.y, 4.5, 0, Math.PI * 2);
+        // helmet seen from above, with the blue visor on the side they are walking towards
+        ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.dir);
+        ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2);
         ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : LW.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
-        ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
+        // visor: a rounded window on the front half, with a white rim of helmet left around it
+        ctx.save(); ctx.beginPath(); ctx.arc(0, 0, 4.7, 0, Math.PI * 2); ctx.clip();
+        ctx.fillStyle = VISOR; ctx.beginPath(); ctx.roundRect(0.9, -3.9, 4.4, 7.8, 1.5); ctx.fill(); ctx.restore();
+        ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); // the helmet outline again (the visor path replaced it)
+        ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
         // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
         ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();

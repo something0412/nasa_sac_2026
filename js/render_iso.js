@@ -59,7 +59,14 @@
       for (let dc = 0; dc < w; dc++) for (let dr = 0; dr < h; dr++) z = Math.max(z, liftAt(c + dc, r + dr));
       return z;
     }
-    const liftOf = (m) => liftOfRect(m.c, m.r, m.w, m.h);
+    // Buildings never move and the terrain never changes, so each building's lift is worked out once and
+    // remembered (here in the view, not in the game state, so saves are not affected).
+    const liftCache = new WeakMap();
+    const liftOf = (m) => {
+      let z = liftCache.get(m);
+      if (z === undefined) { z = liftOfRect(m.c, m.r, m.w, m.h); liftCache.set(m, z); }
+      return z;
+    };
     const up = (p, z) => ({ x: p.x, y: p.y - z });
     // A direction in the grid (like "towards the Sun") → the same direction on screen.
     const gridDir = (dc, dr) => ({ x: (dc - dr) * HW, y: (dc + dr) * HH });
@@ -151,24 +158,60 @@
     // ---------- static ground, drawn once ----------
     const ZONE_IDS = { ridge: 0, plain: 1, ice: 2 }, ZONE_NAMES = ['ridge', 'plain', 'ice'];
     const zoneAt = (c, r) => ZONE_NAMES[zoneGrid[r * COLS + c]];
+    // The ground picture is painted step by step: groundSteps pauses (yield) after each small piece of work,
+    // so prepareStep can paint it a few milliseconds at a time in idle time without freezing the game.
+    // The finished picture is exactly the same as painting it in one go (buildGround).
+    let painting = null; // a ground painting in progress (see prepareStep)
     function buildGround(state) {
+      if (!painting) painting = groundSteps(state);
+      while (!painting.next().done) { /* finish the rest now */ }
+      painting = null;
+    }
+    /** Paint the ground for at most budgetMs. Returns true when the picture is finished. */
+    function prepareStep(state, budgetMs) {
+      if (ground) return true;
+      if (!state) return false;
+      if (!painting) painting = groundSteps(state);
+      const end = performance.now() + budgetMs;
+      do { if (painting.next().done) { painting = null; return true; } } while (performance.now() < end);
+      return false;
+    }
+    function* groundSteps(state) {
       zoneGrid = new Uint8Array(COLS * ROWS);
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) zoneGrid[r * COLS + c] = ZONE_IDS[LW.Sim.zoneOf(state, c, r)];
+      yield;
 
       // 1) A flat "texture" of the Moon: zone colours, dust, small craters and ice sparkles, as if it were flat.
       const tex = document.createElement('canvas');
       tex.width = W; tex.height = H;
       const g = tex.getContext('2d');
+      yield; // (making a picture this big takes a moment by itself)
       let seed = 1234;
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
       const diamond = (path, c, r) => {
         const a = P(c, r), b = P(c + 1, r), d = P(c + 1, r + 1), e = P(c, r + 1);
         path.moveTo(a.x, a.y); path.lineTo(b.x, b.y); path.lineTo(d.x, d.y); path.lineTo(e.x, e.y); path.closePath();
       };
-      const paths = { ridge: new Path2D(), plain: new Path2D(), ice: new Path2D() };
+      // The whole map is one big diamond (its outer edge); only the ice squares need their own outline
+      // (it keeps the ice sparkles on the ice). Outlining all 4480 squares one by one was slow.
       const all = new Path2D();
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) { diamond(paths[zoneAt(c, r)], c, r); diamond(all, c, r); }
-      for (const z of ['plain', 'ridge', 'ice']) { g.fillStyle = C.zones[z].color; g.fill(paths[z]); g.strokeStyle = C.zones[z].color; g.lineWidth = 1; g.stroke(paths[z]); }
+      { const a = P(0, 0), b = P(COLS, 0), d = P(COLS, ROWS), e = P(0, ROWS); all.moveTo(a.x, a.y); all.lineTo(b.x, b.y); all.lineTo(d.x, d.y); all.lineTo(e.x, e.y); all.closePath(); }
+      const paths = { ice: new Path2D() };
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (zoneAt(c, r) === 'ice') diamond(paths.ice, c, r);
+      yield;
+      // Plain is most of the Moon: one quick rectangle (only the squares are used later, so the corners don't matter).
+      g.fillStyle = C.zones.plain.color; g.fillRect(0, 0, W, H);
+      yield;
+      // Hills and ice craters on top, a band of 7 rows at a time (one big fill would freeze the game for a moment).
+      for (const z of ['ridge', 'ice']) {
+        for (let r0 = 0; r0 < ROWS; r0 += 7) {
+          const band = new Path2D();
+          let any = false;
+          for (let r = r0; r < Math.min(ROWS, r0 + 7); r++) for (let c = 0; c < COLS; c++) if (zoneAt(c, r) === z) { diamond(band, c, r); any = true; }
+          if (any) { g.fillStyle = C.zones[z].color; g.fill(band); g.strokeStyle = C.zones[z].color; g.lineWidth = 1; g.stroke(band); }
+          yield;
+        }
+      }
 
       // Dust speckles and craters, only on the Moon (not in the empty corners of the picture).
       g.save(); g.clip(all);
@@ -177,13 +220,19 @@
         const p = P(rand() * COLS, rand() * ROWS), s = rand() * 2 + 0.5;
         g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
         g.fillRect(p.x, p.y, s, s);
+        if (i % 3000 === 2999) yield;
       }
+      yield;
       const base = document.createElement('canvas'); // the ground before craters (see drawCrater in render.js)
       base.width = W; base.height = H; base.getContext('2d').drawImage(tex, 0, 0);
       const craters = [];
       for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
-      for (const k of craters) LW.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
+      for (let i = 0; i < craters.length; i++) { // same crater as render.js, squashed flat
+        const k = craters[i];
+        LW.drawCrater(g, k.x, k.y, k.r, 0.5, base);
+        if (i % 20 === 19) yield;
+      }
       base.width = 0; // free the copy's memory now
       g.restore();
       g.save(); g.clip(paths.ice);
@@ -212,6 +261,7 @@
       const wallL = {}, wallR = {}; // left walls face away from the light more, so they are darker
       for (const z of ZONE_NAMES) { wallL[z] = darken(C.zones[z].color, 0.55); wallR[z] = darken(C.zones[z].color, 0.75); }
       for (let s = 0; s <= COLS + ROWS - 2; s++) {
+        yield; // one diagonal row of squares at a time
         for (let c = Math.max(0, s - ROWS + 1); c <= Math.min(COLS - 1, s); c++) {
           const r = s - c, z = hgt[r * COLS + c] * STEP, zone = zoneAt(c, r);
           const t = P(c, r), L = P(c, r + 1), B = P(c + 1, r + 1), R = P(c + 1, r);
@@ -905,7 +955,7 @@
     // New game. The ground picture is kept: the terrain is the same in every game (it comes from the config),
     // and painting it again takes long enough to freeze the game. Call rebuildGround() if the map ever changes.
     function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; if (ownMotion) motion.reset(); for (const p of pool) p.alive = false; }
-    function rebuildGround() { ground = null; }
+    function rebuildGround() { ground = null; painting = null; }
     /** Paint the ground picture now (if not done yet), so showing this view later does not freeze the game. */
     function prepare(state) { if (!ground && state) buildGround(state); }
     /** The astronaut drawn under the mouse (id), or null. Checks the body and the number tag above it. */
@@ -921,7 +971,7 @@
     }
 
     return {
-      draw, tileAt, toCanvas, hitTag, crewAt, reset, rebuildGround, prepare, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
+      draw, tileAt, toCanvas, hitTag, crewAt, reset, rebuildGround, prepare, prepareStep, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
 
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),

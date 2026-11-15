@@ -26,8 +26,19 @@
     function prepareOther() {
       if (prepared || !lastState) return;
       prepared = true;
-      const run = () => { for (const k in views) if (k !== name) views[k].prepare(lastState); };
-      if (root.requestIdleCallback) root.requestIdleCallback(run, { timeout: 3000 }); else setTimeout(run, 500);
+      // A few milliseconds per slice, so the game never freezes (the 2.5D terraces take ~0.4 s in total).
+      const later = (fn) => (root.requestIdleCallback ? root.requestIdleCallback(fn, { timeout: 1000 }) : setTimeout(fn, 50));
+      const run = (deadline) => {
+        const budget = deadline && deadline.timeRemaining ? Math.max(4, Math.min(12, deadline.timeRemaining())) : 8;
+        let done = true;
+        for (const k in views) {
+          if (k === name) continue; // the view on screen already has its ground
+          const v = views[k];
+          done = (v.prepareStep ? v.prepareStep(lastState, budget) : (v.prepare(lastState), true)) && done;
+        }
+        if (!done) later(run);
+      };
+      later(run);
     }
 
     function set(next) {

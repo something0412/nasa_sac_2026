@@ -60,8 +60,12 @@
         name: 'Storm Shelter', icon: '🛡️', w: 1, h: 1, cost: 3, work: 12,
         desc: 'Small room buried under moon dirt. Blocks 95% of solar storm radiation.',
       },
+      tower: {
+        name: 'Astronomy Tower', icon: '🔭', w: 1, h: 1, cost: 2, work: 6, // GAME: no power use yet
+        desc: "A small telescope dome. Click it when it's built to see NASA's Astronomy Picture of the Day.",
+      },
     },
-    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter'],
+    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower'],
     bermWork: 36, // crew-hours to pile regolith (moon dirt) on the habitat
 
     // REAL: an adult uses about 0.84 kg O2 and ~1.8 kg food (with packaging) per day (NASA BVAD, NASA/TP-2015-218570).
@@ -75,7 +79,21 @@
       hab: 0.5, habBerm: 0.2, shelter: 0.05, // GAME: fraction of radiation that gets through
       limit: 250, // REAL: NASA 30-day crew limit for blood-forming organs, 250 mGy-Eq (NASA-STD-3001)
       warn: 150,
-      storm: { // GAME: solar particle storm on unshielded skin, mSv per hour
+      // REAL DATA: storm radiation is the dose NASA's Lunar Reconnaissance Orbiter actually measured
+      // (CRaTER instrument, via NASA's RadLab API, saved in data/radlab.js by tools/build_radlab.py).
+      // To turn "extra micro-gray per hour measured in lunar orbit" into "mSv per hour for a person
+      // standing on the surface" we multiply by:
+      real: {
+        sky: 0.75, // APPROX: LRO flies ~100 km up, where the Moon hides ~1/3 of the sky. On the ground it
+        //            hides half. Particles come from the open sky, so surface ≈ 0.5 / 0.66 ≈ 0.75 x orbit.
+        rbe: 1.5, //  REAL: NASA-STD-3001 counts solar-storm protons as 1.5x as harmful as the gray value
+        //            (relative biological effectiveness), which gives the mGy-Eq used by the 250 limit.
+      },
+      // Training missions pick storm shapes from real recorded storms. Big ones (Jan 2012, Mar 2012,
+      // Sep 2017) happen only a few times per 11-year solar cycle, so at most ONE per mission.
+      maxBigStorms: 1,
+      stormOn: 0.1, // mSv/h: above this we call it a radiation storm (about 2x the normal background)
+      storm: { // Fallback only, used if data/radlab.js is missing: GAME-tuned curve, mSv per hour
         moderate: { peak: 3, tau: 8 },
         strong: { peak: 20, tau: 12 },
         rise: 2,

@@ -140,9 +140,10 @@
           if (m.type === 'solar') lines.push(m.lit ? `☀️ In sunlight: making ${d.makes} kW` : '🌑 In shadow: making 0 kW');
           else if (m.type === 'battery') lines.push(`Base battery: ${Math.round(state.res.battery)} / ${state.power.cap} kWh`);
           else if (m.type === 'shelter') lines.push(state.sheltering ? 'Crew is inside' : 'Empty. Use it during radiation storms.');
+          else if (m.type === 'tower') lines.push(MT.Sim.firstTower(state) === m ? "<i>Click to see today's picture from NASA</i>" : "<i>Click to see a picture from NASA's archive (since 1995)</i>");
           else lines.push(!m.on ? 'Turned OFF by you' : m.powered ? `✅ Running (uses ${r1(MT.Sim.needOf(state, m))} kW)` : '⚡ NO POWER');
           if (m.noWater) lines.push('💧 No water!');
-          if (m.type !== 'hab' && m.type !== 'battery' && m.type !== 'shelter') lines.push(`<i>Click to turn ${m.on ? 'OFF' : 'ON'}</i>`);
+          if (m.type !== 'hab' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower') lines.push(`<i>Click to turn ${m.on ? 'OFF' : 'ON'}</i>`);
         }
         html = `<b>${d.icon} ${esc(d.name)}</b><br>${esc(d.desc)}<br>${lines.join('<br>')}`;
       } else {
@@ -178,10 +179,41 @@
           <div>☢️ <b>Radiation</b>: solar flares can send radiation storms. Hide the crew in a shelter.</div>
         </div>
         <div class="choices">
-          <button class="choice" data-s="training"><span class="big">🎓</span><b>Training mission</b><span>Random space weather. Different every time.</span></button>
-          <button class="choice real" data-s="history"><span class="big">📡</span><b>Real history: May 2024</b><span>Replay the real solar storms of May 2024 (biggest in 20 years), from NASA DONKI data.</span></button>
+          <button class="choice" data-s="training"><span class="big">🎓</span><b>Training mission</b><span>Random space weather. Every radiation storm is a copy of a real one NASA measured at the Moon.</span></button>
+          <button class="choice real" data-s="history"><span class="big">📡</span><b>Real history: May 2024</b><span>Replay the real solar storms of May 2024 (biggest in 20 years): NASA DONKI alerts and the radiation NASA's LRO measured at the Moon, hour by hour.</span></button>
         </div>`);
       $('modalBody').querySelectorAll('.choice').forEach((b) => b.addEventListener('click', () => { closeModal(); onChoose(b.dataset.s); }));
+    }
+
+    // ----- Astronomy Tower: NASA picture of the day under a fishbowl lens (js/apod.js) -----
+    function showTower(opts, onClose) {
+      modal(`
+        <div class="apod">
+          <div class="apodHead"><h2>🔭 Astronomy Tower</h2><button class="apodX" data-a="close" aria-label="Close">✕</button></div>
+          <p class="apodStatus muted"></p>
+          <div class="apodStage" hidden><canvas class="apodCanvas" tabindex="0"></canvas></div>
+          <p class="apodHint muted small">Move your mouse over the picture to look through the fishbowl. (Arrow keys work too.)</p>
+          <div class="apodInfo" hidden>
+            <h3 class="apodTitle"></h3>
+            <p class="apodMeta muted small"></p>
+            <p class="apodText"></p>
+            <a class="apodLink" href="https://apod.nasa.gov/apod/" target="_blank" rel="noopener noreferrer">See it on NASA's website ↗</a>
+          </div>
+          <div class="row"><button class="primary" data-a="close">Back to the base</button></div>
+        </div>`);
+      const box = $('modal').querySelector('.modalBox');
+      box.classList.add('wide');
+      const view = MT.APOD.show($('modalBody').querySelector('.apod'), opts);
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+      function close() {
+        view.destroy();
+        document.removeEventListener('keydown', onKey, true);
+        box.classList.remove('wide');
+        closeModal();
+        onClose();
+      }
+      document.addEventListener('keydown', onKey, true);
+      $('modalBody').querySelectorAll('[data-a=close]').forEach((b) => b.addEventListener('click', close));
     }
 
     function showEvent(ev, state, onClose) {
@@ -266,7 +298,7 @@
       if (html !== lastBar) { $('countdowns').innerHTML = html; lastBar = html; }
     }
 
-    return { live, update, capcom, setSpeed, tooltip, showStart, showEvent, showDebrief, isModalOpen, select, get selected() { return selected; } };
+    return { live, update, capcom, setSpeed, tooltip, showStart, showEvent, showDebrief, showTower, isModalOpen, select, get selected() { return selected; } };
   }
 
   MT.UI = UI;

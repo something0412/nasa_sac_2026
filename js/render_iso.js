@@ -784,7 +784,7 @@
     // ---------- the rover (TEMPORARY model: a small box on 4 wheels, to be replaced with better art later) ----------
     // Position in grid squares: parked next to its HAB, or on the way between two HABs.
     function roverAt(state) {
-      return MT.Sim.roverPosition(state, frac);
+      return LW.Sim.roverPosition(state, frac);
     }
 
     function craterDepthAt(x, y) {

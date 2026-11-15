@@ -22,22 +22,44 @@
   function sunAz(state, h) {
     return (((state.sunStartAz + cfg().sun.degPerHour * h) % 360) + 360) % 360;
   }
-  function zoneLitAt(state, zone, h) {
+  // How much sunlight reaches a zone, 0 (full shadow) .. 1 (full Sun).
+  // Near the edge of a shadow arc the Sun is partly behind the hill, so light fades smoothly.
+  const angDist = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+  function zoneLight(state, zone, h) {
     const z = cfg().zones[zone];
-    if (z.alwaysDark) return false;
-    const az = sunAz(state, h);
-    return !z.shadowArcs.some(([a, b]) => az >= a && az < b);
+    if (z.alwaysDark) return 0;
+    const az = sunAz(state, h), F = cfg().sun.fadeDeg;
+    let light = 1;
+    for (const [a, b] of z.shadowArcs) {
+      const inside = az >= a && az < b;
+      const d = inside ? Math.min(az - a, b - az) : -Math.min(angDist(az, a), angDist(az, b)); // + inside, - outside
+      light = Math.min(light, clamp(0.5 - d / (2 * F), 0, 1));
+    }
+    return light;
   }
+  const zoneLitAt = (state, zone, h) => zoneLight(state, zone, h) > 0.5;
 
   // ---------- scenarios ----------
+  // Real radiation measured by NASA's LRO (data/radlab.js), or null if that file is missing.
+  const radlab = () => (root.RADLAB && root.RADLAB.storms && root.RADLAB.storms.length ? root.RADLAB : null);
+
+  /** LRO orbit "extra uGy/h" -> mSv/h for a person on the surface (see rad.real in config.js). */
+  function crewRate(extraMicroGyPerH) {
+    const k = cfg().rad.real;
+    return (extraMicroGyPerH / 1000) * k.sky * k.rbe;
+  }
+
   function buildSpaceWeather(kind, rand) {
     const R = cfg().rad.storm;
     if (kind === 'history' && root.MAY2024) {
       const d = root.MAY2024;
+      const lab = radlab();
       return {
         flares: d.flares.filter((f) => f.h < cfg().missionHours).map((f) => ({ h: f.h, cls: f.cls, date: f.t })),
+        // DONKI storm times drive the warnings; the dose itself comes hour by hour from LRO (radCurve).
         storms: d.sepStorms.map((s) => ({ h: s.h, strong: s.strong, date: s.t, ...(s.strong ? R.strong : R.moderate) })),
         geomag: d.geomagStorms.filter((g) => g.h < cfg().missionHours),
+        radCurve: lab && lab.may2024 ? lab.may2024.extra : null,
       };
     }
     // Random training mission: flares every 1-3 days. Bigger flares are more likely to send particles.
@@ -62,7 +84,32 @@
       storms.push({ h: round1(f.h + 2), strong: true, ...R.strong });
     }
     storms.sort((a, b) => a.h - b.h);
-    return { flares, storms, geomag: [] };
+    giveRealShapes(storms, rand);
+    return { flares, storms, geomag: [], radCurve: null };
+  }
+
+  /**
+   * Training missions: every storm becomes a copy of a real storm LRO measured. "Strong" storms
+   * use one of the big ones (Jan 2012, Mar 2012, Sep 2017); later strong storms in the same
+   * mission are downgraded, because storms that big are rare (rad.maxBigStorms).
+   */
+  function giveRealShapes(storms, rand) {
+    const lab = radlab();
+    if (!lab) return;
+    let big = 0;
+    const pick = (size) => {
+      const list = lab.storms.filter((s) => s.size === size);
+      return list.length ? list[Math.floor(rand() * list.length)] : null;
+    };
+    for (const st of storms) {
+      if (st.strong && big >= cfg().rad.maxBigStorms) st.strong = false;
+      const real = pick(st.strong ? 'strong' : 'moderate');
+      if (!real) continue;
+      if (st.strong) big++;
+      st.profile = real.extra;
+      st.realName = real.name;
+      st.realStart = real.start;
+    }
   }
 
   // ---------- create ----------
@@ -92,6 +139,7 @@
     state.flares = sw.flares;
     state.storms = sw.storms;
     state.geomag = sw.geomag;
+    state.radCurve = sw.radCurve; // real hour-by-hour LRO storm dose (history mission only)
 
     // Light forecast for every zone, every hour of the mission (shown as the sunlight strip).
     state.light = {};
@@ -101,12 +149,13 @@
     }
 
     // Starting base (already built).
-    addModule(state, 'hab', 8, 6, true);
-    addModule(state, 'solar', 6, 6, true);
-    addModule(state, 'solar', 6, 7, true);
-    addModule(state, 'battery', 11, 6, true);
-    addModule(state, 'o2gen', 11, 7, true);
-    addModule(state, 'greenhouse', 8, 9, true);
+    const B = C.base;
+    addModule(state, 'hab', B.c, B.r, true);
+    addModule(state, 'solar', B.c - 2, B.r, true);
+    addModule(state, 'solar', B.c - 2, B.r + 1, true);
+    addModule(state, 'battery', B.c + 3, B.r, true);
+    addModule(state, 'o2gen', B.c + 3, B.r + 1, true);
+    addModule(state, 'greenhouse', B.c, B.r + 3, true);
     state.res.battery = Math.min(state.res.battery, batteryCap(state));
     updatePower(state, 0, true);
     return state;
@@ -124,6 +173,9 @@
   const built = (state, type) => state.modules.filter((m) => m.built && (!type || m.type === type));
   const hab = (state) => state.modules.find((m) => m.type === 'hab');
   const hasShelter = (state) => built(state, 'shelter').length > 0;
+  /** The first Astronomy Tower finished (it shows today's picture; later towers show the archive).
+   *  The crew builds in the order things were placed, so that is the lowest id. */
+  const firstTower = (state) => built(state, 'tower').reduce((a, m) => (!a || m.id < a.id ? m : a), null);
   const batteryCap = (state) => built(state, 'battery').length * cfg().modules.battery.store;
   const currentJob = (state) => {
     const m = state.modules.find((x) => !x.built);
@@ -201,12 +253,16 @@
     return d.power || 0;
   }
 
+  /** Extra radiation from solar storms at hour h, in mSv/h for an unshielded person on the surface. */
   function stormRateAt(state, h) {
+    if (state.radCurve) return crewRate(state.radCurve[Math.floor(h)] || 0);
     const rise = cfg().rad.storm.rise;
     let s = 0;
     for (const st of state.storms) {
       const t = h - st.h;
-      if (t < 0 || t > 120) continue;
+      if (t < 0) continue;
+      if (st.profile) { s += crewRate(st.profile[Math.floor(t)] || 0); continue; }
+      if (t > 120) continue;
       s += t < rise ? (st.peak * t) / rise : st.peak * Math.exp(-(t - rise) / st.tau);
     }
     return s;
@@ -217,9 +273,10 @@
     const C = cfg();
     let supply = 0;
     for (const m of built(state, 'solar')) {
-      m.lit = zoneLitAt(state, zoneOf(state, m.c, m.r), h + 0.5);
-      m.powered = m.lit;
-      if (m.lit && m.on) supply += C.modules.solar.makes;
+      m.light = zoneLight(state, zoneOf(state, m.c, m.r), h + 0.5);
+      m.lit = m.light > 0.5;
+      m.powered = m.light > 0.02;
+      if (m.on) supply += C.modules.solar.makes * m.light; // half-covered Sun = half power
     }
     for (const m of built(state, 'battery')) m.powered = true;
     const consumers = built(state).filter((m) => needOf(state, m) > 0).sort((a, b) => (C.modules[a.type].priority - C.modules[b.type].priority) || a.id - b.id);
@@ -276,7 +333,7 @@
       let len = 0; while (start + len < L.length && !L[start + len]) len++;
       const inH = start - h;
       say('warn', `Forecast: shadow coming to the ${C.zones[z].name.toLowerCase()}`,
-        `In ${inH} hours the Sun goes behind the hills for about ${round1(len / 24)} days. ${panels} of your panels will stop making power. Charge batteries, save power, or build panels where the Sun still shines.`, { pause: true });
+        `In ${inH} hours the Sun goes behind the hills for about ${round1(len / 24)} days. ${panels} of your panels will stop making power. Charge batteries, save power, or build panels where the Sun still shines.`, { banner: true });
     }
 
     // Space weather.
@@ -289,17 +346,27 @@
       say('info', `Earth news: geomagnetic storm (Kp ${g.kpMax})`, g.kpMax >= 8 ? 'Huge auroras on Earth tonight! Earth\'s magnetic field protects people there. The Moon has no magnetic field.' : 'Auroras on Earth. The Moon has no magnetic field to protect you.');
     }
     for (const s of state.storms) {
-      if (!s.warned && h >= s.h - C.rad.warnLead) {
+      if (!s.warned && h + 1 >= s.h - C.rad.warnLead) { // +1: the clock shows hour h+1 right after this step
         s.warned = true;
         say('bad', s.strong ? '☢️ STRONG radiation storm incoming!' : '☢️ Radiation storm incoming',
-          (hasShelter(state) ? 'Particles arrive in about 2 hours. Move the crew to the Storm Shelter?' : 'Particles arrive in about 2 hours. You have NO storm shelter. Crew inside the habitat get half the radiation; crew outside get all of it.') +
-          (s.date ? ` (Real event: ${s.date.slice(0, 16).replace('T', ' ')} UTC)` : ''),
-          { pause: true, decision: hasShelter(state) ? 'shelter' : null });
+          (hasShelter(state) ? 'Particles arrive in about 2 hours.' : 'Particles arrive in about 2 hours. You have NO storm shelter.') +
+          (s.date ? ` (Real event: ${s.date.slice(0, 16).replace('T', ' ')} UTC)` : '') +
+          (s.realName ? ` This storm copies the real ${s.realName}, measured by NASA's Lunar Reconnaissance Orbiter.` : ''));
+        // No pop-up and no pause on purpose: players must notice the countdown bar / CAPCOM themselves.
       }
     }
     const S = stormRateAt(state, h + 0.5);
     state.stormRate = S;
-    track(state, 'storm', S > 0.3, null, 'All clear: the radiation storm is over.', ev);
+    const stormWasOn = state.since.storm != null;
+    track(state, 'storm', S > C.rad.stormOn, null, 'All clear: the radiation storm is over.', ev);
+    // REAL: big storms come in waves over several days (the Sun keeps erupting from the same spot),
+    // and forecasters send a new alert every time radiation climbs past the threshold again.
+    const justWarned = state.storms.some((s) => s.warned && h - (s.h - C.rad.warnLead) < 6);
+    if (!stormWasOn && S > C.rad.stormOn && !justWarned && !state.sheltering) {
+      say('bad', '☢️ Radiation is rising again!',
+        hasShelter(state) ? 'Another wave of solar particles is arriving.'
+          : 'Another wave of solar particles is arriving. Stop work outside; the habitat blocks half of it.'); // CAPCOM only, no pop-up
+    }
 
     // Construction.
     const job = currentJob(state);
@@ -386,7 +453,7 @@
     const w = wOut;
     const add = { background: ((n - w) * inF * bg) / n, storm: ((n - w) * inF * S) / n, outside: (w * (bg + S)) / n };
     for (const k in add) { state.doseFrom[k] += add[k]; state.dose += add[k]; }
-    if (S > 0.3 && w > 0 && !state.warned['eva' + Math.floor(h / 6)]) {
+    if (S > C.rad.stormOn && w > 0 && !state.warned['eva' + Math.floor(h / 6)]) {
       state.warned['eva' + Math.floor(h / 6)] = true;
       say('bad', 'Astronauts are OUTSIDE during a radiation storm!', 'They are building right now and getting the full dose. Pause building or use the shelter.');
     }
@@ -396,7 +463,7 @@
     state.cargo.forEach((k, i) => {
       if (!k.asked && h >= k.h - C.cargoAskLead) {
         k.asked = true;
-        say('info', `Cargo lander #${i + 1} launches soon`, 'It lands in 2 days. What should it carry?', { pause: true, decision: 'cargo', cargoIndex: i });
+        say('info', `Cargo lander #${i + 1} launches soon`, 'It lands in 2 days. What should it carry?', { banner: true, decision: 'cargo', cargoIndex: i });
       }
       if (!k.arrived && h >= k.h) {
         k.arrived = true;
@@ -448,7 +515,7 @@
       }
       chains.push(c.concat(consequences));
     }
-    if (state.stormRate > 0.3) {
+    if (state.stormRate > cfg().rad.stormOn) {
       const shelter = state.sheltering && hasShelter(state);
       const w = workersOutside(state);
       chains.push([
@@ -493,7 +560,7 @@
         powerStory();
         add(startOf('nopower_hab'), 'With no power left, the heaters stopped.');
         add(t, `The habitat cooled below ${C.habTemp.fail} °C. The crew had to leave.`);
-        if (!ridgePanels) out.tips.push('Build solar panels on the HIGH RIDGE (light gray, top-left). It stays sunny much longer.');
+        if (!ridgePanels) out.tips.push('Build solar panels on HIGH GROUND (the light gray hills and ridges). It stays sunny much longer. Drag the map to find them.');
         out.tips.push('Check the sunlight forecast under the map. Before a long shadow, fill the batteries and build more of them.');
         out.tips.push('Turn off greenhouses during the dark. The crew can eat stored food for a few days.');
         out.fact = 'NASA picked the lunar south pole partly because some ridges there are sunlit most of the time. Engineers study light maps from the Lunar Reconnaissance Orbiter to choose where to put solar panels.';
@@ -504,7 +571,7 @@
         add(startOf('noO2Make'), 'The O₂ Generator stopped making oxygen.');
         add(t, 'The oxygen tank reached zero.');
         out.tips.push('The O₂ Generator needs BOTH power and water. Watch both bars.');
-        if (!built(state, 'drill').length) out.tips.push('Build an Ice Drill in the dark crater (bottom-right). Ice → water → oxygen.');
+        if (!built(state, 'drill').length) out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one). Ice → water → oxygen.');
         out.tips.push('Choose "Water & air" cargo if oxygen is getting low.');
         out.fact = 'On the ISS, the Oxygen Generation System makes oxygen by splitting water with electricity, the same idea as in this game. A Moon base could get that water from ice in permanently shadowed craters.';
       } else if (cause === 'radiation') {
@@ -515,7 +582,10 @@
         if (!hasShelter(state)) out.tips.push('Build a Storm Shelter early. It blocks 95% of storm radiation.');
         out.tips.push('When a radiation storm warning comes, stop building outside and move the crew into the shelter.');
         if (!state.berm.built) out.tips.push('Pile moon dirt on the habitat ("Shield habitat" button). It blocks radiation every day.');
-        out.fact = 'The Moon has no magnetic field and almost no air, so solar particles hit the surface directly. Artemis astronauts in the Orion spacecraft have a plan to build a shelter out of supply bags during a solar storm.';
+        const big = state.storms.find((s) => s.strong && s.profile);
+        out.fact = big
+          ? `The ${big.realName} really happened. NASA's Lunar Reconnaissance Orbiter measured it from Moon orbit: an astronaut standing on the Moon with no shelter would have got about ${Math.round(big.profile.reduce((a, v) => a + crewRate(v), 0) / 10) * 10} mSv, many times NASA's ${C.rad.limit} mSv limit. That is why a storm shelter is a must for a Moon base.`
+          : 'The Moon has no magnetic field and almost no air, so solar particles hit the surface directly. Artemis astronauts in the Orion spacecraft have a plan to build a shelter out of supply bags during a solar storm.';
       } else if (cause === 'food') {
         out.title = 'The crew ran out of food';
         if (state.stats.unpoweredH.greenhouse) add(null, `The greenhouses had no power for ${state.stats.unpoweredH.greenhouse} hours.`);
@@ -534,7 +604,7 @@
         add(null, `The O₂ Generator used ${Math.round(state.stats.o2Made * C.modules.o2gen.waterPerH / C.modules.o2gen.o2PerH)} kg of water to make air. The crew and greenhouses used more.`);
         add(startOf('waterEmpty'), 'The water tank ran dry.');
         add(t, 'After 2 days without water, the mission had to end.');
-        out.tips.push('Build an Ice Drill in the dark crater (bottom-right) and give it power.');
+        out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one) and give it power.');
         out.fact = 'NASA\'s LCROSS mission crashed into a dark crater near the lunar south pole in 2009 and found water ice in the debris cloud.';
       }
     } else {
@@ -555,8 +625,40 @@
     return out;
   }
 
+  // ---------- countdowns for the status bar ----------
+  // now = state.hour + fraction of the current hour. Returns what is coming, soonest first.
+  function upcoming(state, now) {
+    const C = cfg(), out = [];
+    // Radiation storms: only known after the warning (forecasters see the flare first).
+    for (const s of state.storms) {
+      if (s.warned && now < s.h) {
+        out.push({ kind: 'storm', icon: '☢️', level: 'bad', left: s.h - now, total: C.rad.warnLead,
+          label: `${s.strong ? 'STRONG radiation storm' : 'Radiation storm'} arrives in` });
+      }
+    }
+    if (state.stormRate > cfg().rad.stormOn) {
+      // Look ahead to when all storms fade below the "active" level.
+      let end = Math.floor(now);
+      while (end < now + 120 && stormRateAt(state, end + 0.5) > cfg().rad.stormOn) end++;
+      const started = Math.min(...state.storms.filter((s) => s.h <= now && stormRateAt(state, now) > 0).map((s) => s.h));
+      out.push({ kind: 'stormActive', icon: '☢️', level: 'bad', left: Math.max(0, end - now), total: Math.max(1, end - started),
+        label: state.sheltering ? 'Storm active (crew sheltered) · ends in about' : 'Storm active · ends in about' });
+    }
+    // Next cargo lander.
+    const i = state.cargo.findIndex((k) => !k.arrived);
+    if (i >= 0) {
+      const k = state.cargo[i];
+      const prev = i > 0 ? state.cargo[i - 1].h : 0;
+      const what = k.choice ? C.cargoOptions[k.choice].name : k.asked ? 'contents not chosen yet!' : 'you choose 2 days before';
+      out.push({ kind: 'cargo', icon: '🚀', level: k.asked && !k.choice ? 'warn' : 'info', left: k.h - now, total: k.h - prev,
+        label: `Cargo #${i + 1} (${what}) lands in` });
+    }
+    return out.sort((a, b) => a.left - b.left);
+  }
+
   MT.Sim = {
+    upcoming, stormRateAt,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo,
-    causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLitAt, currentJob, workersOutside, hasShelter, batteryCap, needOf, built, fmtDay, day,
+    causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, currentJob, workersOutside, hasShelter, firstTower, batteryCap, needOf, built, fmtDay, day,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

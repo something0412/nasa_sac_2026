@@ -9,21 +9,40 @@
     crew: 4,
     workers: 2, // astronauts who go outside to build (EVA)
 
-    map: { cols: 20, rows: 14, tile: 40 },
+    // The world is 80 x 56 tiles; the camera shows 20 x 14 of them. Drag to look around.
+    map: { cols: 80, rows: 56, tile: 40, viewCols: 20, viewRows: 14 },
+    base: { c: 39, r: 27 }, // where the habitat starts (top-left tile of its 2x2), middle of the map
 
     // REAL: at the lunar south pole the Sun never rises high. It circles the horizon once per
     // synodic month (29.53 days), so crater rims and hills cast shadows that come and go.
     // High ridges (e.g. Shackleton rim) are lit up to ~80-90% of the time (LRO LOLA, Mazarico et al. 2011).
-    sun: { degPerHour: 360 / (29.53 * 24), startAz: 90 },
+    // fadeDeg: as the Sun slides behind a hill, its disk is covered bit by bit, so light fades over
+    // a few degrees of Sun movement (GAME: 3° each side = about 12 game hours from full Sun to full shadow).
+    sun: { degPerHour: 360 / (29.53 * 24), startAz: 90, fadeDeg: 3 },
 
     zones: {
       ridge: { name: 'High ridge', color: '#9a9aa2', shadowArcs: [[262, 292]], blurb: 'High crater rim. The Sun is blocked only for short times.' },
       plain: { name: 'Plain', color: '#76767e', shadowArcs: [[180, 250], [300, 320]], blurb: 'Lower ground. Hills block the Sun for days at a time.' },
       ice: { name: 'Shadowed crater (ice)', color: '#2b3448', alwaysDark: true, blurb: 'Never sees the Sun (about -230 °C). Water ice hides here.' },
     },
+    // Terrain features in 0..1 map coordinates (u = left→right, v = top→bottom), so they scale with the map.
+    // Ovals: centre (u, v), radius (ru, rv). The first match wins. Labels are drawn on the map.
+    features: [
+      { zone: 'ice', u: 0.82, v: 0.76, ru: 0.2, rv: 0.22, label: 'SHADOWED CRATER (ICE)' },
+      { zone: 'ice', u: 0.12, v: 0.86, ru: 0.07, rv: 0.09, label: 'SMALL ICE CRATER' },
+      { zone: 'ice', u: 0.47, v: 0.09, ru: 0.055, rv: 0.07, label: 'ICE CRATER' },
+      { zone: 'ridge', corner: 0.36, u: 0.1, v: 0.06, label: 'HIGH RIDGE (crater rim)' }, // top-left triangle
+      { zone: 'ridge', u: 0.9, v: 0.12, ru: 0.11, rv: 0.13, label: 'HIGH HILL' },
+      { zone: 'ridge', u: 0.27, v: 0.68, ru: 0.06, rv: 0.08, label: 'SMALL HILL' },
+      { zone: 'ridge', u: 0.66, v: 0.3, ru: 0.035, rv: 0.05, label: 'ROCKY KNOB' },
+    ],
     zoneAt(c, r) {
-      if (((c - 16.5) / 4.2) ** 2 + ((r - 10.5) / 3.3) ** 2 < 1) return 'ice';
-      if (r + 0.7 * c < 5) return 'ridge';
+      const u = (c + 0.5) / this.map.cols, v = (r + 0.5) / this.map.rows;
+      const wobble = 0.025 * Math.sin(u * 23) + 0.02 * Math.sin(v * 31); // makes edges less perfect
+      for (const f of this.features) {
+        const inside = f.corner ? u + v + wobble < f.corner : ((u - f.u) / f.ru) ** 2 + ((v - f.v) / f.rv) ** 2 < 1 + wobble * 4;
+        if (inside) return f.zone;
+      }
       return 'plain';
     },
 
@@ -60,8 +79,12 @@
         name: 'Storm Shelter', icon: '🛡️', w: 1, h: 1, cost: 3, work: 12,
         desc: 'Small room buried under moon dirt. Blocks 95% of solar storm radiation.',
       },
+      tower: {
+        name: 'Astronomy Tower', icon: '🔭', w: 1, h: 1, cost: 2, work: 6, // GAME: no power use yet
+        desc: "A small telescope dome. Click it when it's built to see NASA's Astronomy Picture of the Day.",
+      },
     },
-    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter'],
+    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower'],
     bermWork: 36, // crew-hours to pile regolith (moon dirt) on the habitat
 
     // REAL: an adult uses about 0.84 kg O2 and ~1.8 kg food (with packaging) per day (NASA BVAD, NASA/TP-2015-218570).
@@ -75,7 +98,21 @@
       hab: 0.5, habBerm: 0.2, shelter: 0.05, // GAME: fraction of radiation that gets through
       limit: 250, // REAL: NASA 30-day crew limit for blood-forming organs, 250 mGy-Eq (NASA-STD-3001)
       warn: 150,
-      storm: { // GAME: solar particle storm on unshielded skin, mSv per hour
+      // REAL DATA: storm radiation is the dose NASA's Lunar Reconnaissance Orbiter actually measured
+      // (CRaTER instrument, via NASA's RadLab API, saved in data/radlab.js by tools/build_radlab.py).
+      // To turn "extra micro-gray per hour measured in lunar orbit" into "mSv per hour for a person
+      // standing on the surface" we multiply by:
+      real: {
+        sky: 0.75, // APPROX: LRO flies ~100 km up, where the Moon hides ~1/3 of the sky. On the ground it
+        //            hides half. Particles come from the open sky, so surface ≈ 0.5 / 0.66 ≈ 0.75 x orbit.
+        rbe: 1.5, //  REAL: NASA-STD-3001 counts solar-storm protons as 1.5x as harmful as the gray value
+        //            (relative biological effectiveness), which gives the mGy-Eq used by the 250 limit.
+      },
+      // Training missions pick storm shapes from real recorded storms. Big ones (Jan 2012, Mar 2012,
+      // Sep 2017) happen only a few times per 11-year solar cycle, so at most ONE per mission.
+      maxBigStorms: 1,
+      stormOn: 0.1, // mSv/h: above this we call it a radiation storm (about 2x the normal background)
+      storm: { // Fallback only, used if data/radlab.js is missing: GAME-tuned curve, mSv per hour
         moderate: { peak: 3, tau: 8 },
         strong: { peak: 20, tau: 12 },
         rise: 2,

@@ -11,13 +11,24 @@
   try { if (localStorage.getItem(STORE_KEY) === null && localStorage.getItem('mt.view') !== null) { localStorage.setItem(STORE_KEY, localStorage.getItem('mt.view')); localStorage.removeItem('mt.view'); } } catch (e) { /* storage blocked: fine */ }
 
   function ViewSwitch(canvas, forecastCanvas) {
-    const views = { top: LW.Renderer(canvas, forecastCanvas), iso: LW.IsoRenderer(canvas) };
+    // One shared set of astronaut positions for both views, moved every frame (whichever view is showing).
+    const motion = LW.CrewMotion();
+    const views = { top: LW.Renderer(canvas, forecastCanvas, motion), iso: LW.IsoRenderer(canvas, motion) };
     let name = DEFAULT_VIEW;
     try { const saved = root.localStorage.getItem(STORE_KEY); if (views[saved]) name = saved; } catch (e) { /* storage blocked: use default */ }
     let lastState = null;
     const listeners = [];
     const cur = () => views[name];
     const both = (fn) => (...args) => { views.top[fn](...args); views.iso[fn](...args); };
+
+    // Paint the hidden view's ground picture once, when the browser is not busy, so the first switch is instant.
+    let prepared = false;
+    function prepareOther() {
+      if (prepared || !lastState) return;
+      prepared = true;
+      const run = () => { for (const k in views) if (k !== name) views[k].prepare(lastState); };
+      if (root.requestIdleCallback) root.requestIdleCallback(run, { timeout: 3000 }); else setTimeout(run, 500);
+    }
 
     function set(next) {
       if (!views[next] || next === name) return;
@@ -28,7 +39,7 @@
     }
 
     return {
-      draw: (state, dt, ui) => { lastState = state; cur().draw(state, dt, ui); },
+      draw: (state, dt, ui) => { lastState = state; motion.update(state, dt); cur().draw(state, dt, ui); prepareOther(); },
       drawForecast: (state) => views.top.drawForecast(state), // the sunlight strip is the same in both views
       tileAt: (e) => cur().tileAt(e),
       toCanvas: (e) => cur().toCanvas(e),
@@ -42,10 +53,11 @@
       zoomAt: (e, factor) => { if (cur().zoomAt) cur().zoomAt(e, factor); },
       canZoom: () => !!cur().zoomAt,
       debug: () => ({ view: name, ...cur().debug() }),
-      reset: both('reset'),
+      reset: (...a) => { motion.reset(); both('reset')(...a); },
       resize: both('resize'),
       setSafeArea: both('setSafeArea'),
       view: () => name,
+      crewPos: (id) => motion.get(id), // where an astronaut is on the map (grid squares), for debugging
       setView: set,
       toggleView: () => set(name === 'top' ? 'iso' : 'top'),
       onViewChange: (fn) => { listeners.push(fn); fn(name); },

@@ -800,6 +800,20 @@
     for (const a of free) a.where = a.job ? 'outside' : a.gymLeft > 0 ? 'gym' : 'hab';
   }
 
+  /**
+   * The player just gave an order (build, repair, gym, tower, shelter, ...): decide who goes where RIGHT NOW,
+   * so the astronaut starts walking at once instead of at the next game hour. No time passes and nothing
+   * random happens (assignCrew only looks at the current state), so saving and loading stay exact.
+   * Returns messages (e.g. "grounded") for CAPCOM.
+   */
+  function applyOrders(state) {
+    if (!state || state.status !== 'running') return [];
+    const ev = [];
+    const say = (level, title, text, extra) => { log(state, level, title + (text ? ' — ' + text : '')); ev.push({ level, title, text, ...extra }); };
+    assignCrew(state, say);
+    return ev;
+  }
+
   /** A 1-day task (or tower visit) is over. */
   function finishTask(state, a, t, say) {
     const C = cfg(), R = C.research;
@@ -1470,6 +1484,7 @@
   }
 
   LW.Sim = {
+    applyOrders,
     upcoming, stormRateAt,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo, orderRepair, startHeal, healAmount, maxHp,
     useTower, towerReadyIn, startResearch, resumeTask, researchCost, plannedLevel, tendGreenhouse, sendToGym, assignWorker, boostOf, inLabRange, solarKw,

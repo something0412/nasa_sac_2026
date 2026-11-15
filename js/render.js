@@ -42,7 +42,11 @@
   }
   LW.drawCrater = drawCrater;
 
-  function Renderer(canvas, forecastCanvas) {
+  // motion: shared astronaut positions (js/crew_motion.js). view.js passes one shared object to both views;
+  // without it this view keeps its own (used by tests and if render.js is used on its own).
+  function Renderer(canvas, forecastCanvas, motion) {
+    const ownMotion = !motion;
+    if (!motion) motion = LW.CrewMotion();
     const C = LW.CONFIG, T = C.map.tile;
     const W = C.map.cols * T, H = C.map.rows * T; // world size
     let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
@@ -54,6 +58,7 @@
     const ctx = canvas.getContext('2d');
     const fctx = forecastCanvas.getContext('2d');
 
+    let needCenter = true; // look at the base on the first frame of a game
     let ground = null, zonePaths = null;
     let crew = {}; // astronaut id -> where their dot is drawn (world pixels), also used to click on them
     const pool = [];
@@ -143,6 +148,7 @@
       for (let i = 0; i < 46 * area; i++) craters.push({ x: rand() * W, y: rand() * H, r: 4 + rand() ** 2 * 30 });
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
       for (const k of craters) drawCrater(g, k.x, k.y, k.r, 1, base);
+      base.width = base.height = 0; // free the big temporary copy (~27 MB) right away
       g.save(); g.clip(zonePaths.ice);
       for (let i = 0; i < 260 * area; i++) {
         g.fillStyle = `rgba(170,210,255,${0.15 + rand() * 0.35})`;
@@ -422,7 +428,8 @@
 
     // ---------- main draw ----------
     function draw(state, dt, ui) {
-      if (!ground) { buildGround(state); centerOnBase(state, false); }
+      if (!ground) buildGround(state);
+      if (needCenter) { centerOnBase(state, false); needCenter = false; }
       frac = ui.frac || 0;
       time += dt;
       dashOffset -= dt * 28;
@@ -467,9 +474,13 @@
 
       // Object shadows point AWAY from the Sun. The Sun is always low at the pole, so shadows are long;
       // as the Sun sinks behind a hill they stretch and fade out.
+      // Only draw what the camera can see (+ a margin for long shadows, labels and icons), so a big base stays fast.
+      const MARGIN = 120, vx0 = cam.x - MARGIN, vy0 = cam.y - MARGIN, vx1 = cam.x + VWz + MARGIN, vy1 = cam.y + VHz + MARGIN;
+      const onScreen = (m) => (m.c + m.w) * T >= vx0 && m.c * T <= vx1 && (m.r + m.h) * T >= vy0 && m.r * T <= vy1;
+      const lineOnScreen = (a, b) => Math.max(a.x, b.x) >= vx0 && Math.min(a.x, b.x) <= vx1 && Math.max(a.y, b.y) >= vy0 && Math.min(a.y, b.y) <= vy1;
       const sv = sunVec(state);
       for (const m of state.modules) {
-        if (!m.built || m.type === 'pad') continue; // (flat pads cast no shadow)
+        if (!m.built || m.type === 'pad' || !onScreen(m)) continue; // (flat pads cast no shadow)
         const L = lightAt(state, m);
         if (L < 0.02) continue;
         const pad = m.type === 'hab' ? 10 : 8;
@@ -499,11 +510,12 @@
         ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !LW.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         const to = m.type === 'hab' ? hc : nearestHab(c);
+        if (!lineOnScreen(c, to)) continue; // a cable can cross the screen even if both ends are off it
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(to.x, to.y); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
 
-      for (const m of state.modules) drawModule(state, m, blink);
+      for (const m of state.modules) if (onScreen(m)) drawModule(state, m, blink);
 
       // Research Bay reach (dashed circle): while placing one, hovering one, or with the Scientist picked.
       const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
@@ -549,38 +561,19 @@
 
       drawRover(state);
 
-      // astronauts: each one walks to where the AMS says they are (job site, gym, lab, greenhouse, tower, shelter or their HAB)
-      const shelters = LW.Sim.built(state, 'shelter');
+      // astronauts: where they stand comes from the shared crew motion (js/crew_motion.js, grid squares),
+      // so they keep walking from the same spot when the player switches views.
+      if (ownMotion) motion.update(state, dt);
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
-        const i = A.id - 1;
-        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2, init: false }); // dir: way the visor faces
-        if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
-        const homeC = center(LW.Sim.homeOf(state, A));
-        let tx = homeC.x + Math.cos(i * 1.57 + 0.8) * 9, ty = homeC.y + Math.sin(i * 1.57 + 0.8) * 9;
-        let visible = false;
-        // Shelter: the one closest to their HAB.
-        const shelter = shelters.reduce((b, s) => (!b || Math.hypot(center(s).x - homeC.x, center(s).y - homeC.y) < Math.hypot(center(b).x - homeC.x, center(b).y - homeC.y) ? s : b), null);
-        if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + (i % 4) * 6; ty = s.y + 12; visible = true; }
-        else if (A.where === 'gym') {
-          const g = state.modules.find((m) => m.id === A.gymId);
-          if (g) { const gc = center(g); tx = gc.x; ty = gc.y + 13; visible = true; }
-        } else if (A.task && A.where === A.task.kind) { // Research Bay, greenhouse or Astronomy Tower
-          const tm = state.modules.find((m) => m.id === A.task.id);
-          if (tm) { const c = center(tm); tx = c.x + Math.sin(time * 1.5 + i) * 2; ty = c.y + 14; visible = true; }
-        } else if (A.where === 'outside') {
-          const j = jobs.find((x) => x.key === A.job);
-          const bc = j && j.m ? center(j.m) : homeC; // moon-dirt shield: walk around that HAB
-          const jc = j && j.m && j.kind !== 'berm' ? center(j.m) : { x: bc.x + Math.cos(time * 0.4 + i * 3) * 42, y: bc.y + Math.sin(time * 0.4 + i * 3) * 42 };
-          tx = jc.x + Math.sin(time * 3 + i) * 3; ty = jc.y + 15; visible = true;
-        }
-        if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
-        const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
-        if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; a.dir = Math.atan2(dy, dx); } else { a.x = tx; a.y = ty; }
+        const p = motion.get(A.id);
+        if (!p || A.trip) return; // inside the rover (they appear at the new HAB when it arrives)
+        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2 });
+        a.x = p.c * T; a.y = p.r * T; a.dir = p.dir; // grid squares -> world pixels; dir = way the visor faces
         const sel = picked === A;
         a.id = A.id;
-        a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
+        a.shown = !A.medbay && (p.visible || p.dist * T >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
         const exposed = LW.Sim.isExposed(A);
         if (sel) { // picked: pulsing gold ring
@@ -747,7 +740,12 @@
       fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
     }
 
-    function reset() { ground = null; tagRect = null; zoom = 1; for (const p of pool) p.alive = false; }
+    // New game. The ground picture is kept: the terrain is the same in every game (it comes from the config),
+    // and painting it again takes long enough to freeze the game. Call rebuildGround() if the map ever changes.
+    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; for (const p of pool) p.alive = false; }
+    function rebuildGround() { ground = null; }
+    /** Paint the ground picture now (if not done yet), so showing this view later does not freeze the game. */
+    function prepare(state) { if (!ground && state) buildGround(state); }
     /** The astronaut drawn under the mouse (id), or null. */
     function crewAt(evt) {
       const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels
@@ -761,7 +759,7 @@
     }
 
     return {
-      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
+      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, rebuildGround, prepare, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
       panTo: (x, y) => moveTo(x, y),

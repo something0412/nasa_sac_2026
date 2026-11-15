@@ -93,7 +93,11 @@
     ui.setSpeed(s);
   }
 
-  function refresh() { ui.update(state); renderer.drawForecast(state); updateSafeArea(); }
+  function refresh() {
+    // An order the player just gave takes effect right away (the astronaut starts walking now, not next game hour).
+    if (state) for (const ev of LW.Sim.applyOrders(state)) ui.capcom(ev);
+    ui.update(state); renderer.drawForecast(state); updateSafeArea();
+  }
 
   function start(scn) {
     scenario = scn;

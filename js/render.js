@@ -12,6 +12,10 @@
     const C = MT.CONFIG, T = C.map.tile;
     const W = C.map.cols * T, H = C.map.rows * T; // world size
     let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
+    // ZOOM: 1 = normal, 2 = everything twice as big. The camera then sees VW / zoom world pixels across.
+    const ZOOM_MIN = 0.5, ZOOM_MAX = 2.5;
+    let zoom = 1;
+    const vw = () => VW / zoom, vh = () => VH / zoom; // how much of the world fits on screen
     const safe = { left: 0, right: 0, top: 0, bottom: 0 }; // screen edges covered by open panels
     const ctx = canvas.getContext('2d');
     const fctx = forecastCanvas.getContext('2d');
@@ -28,9 +32,9 @@
     // The canvas fills the window. We draw in CSS pixels and scale by the device pixel ratio so it stays sharp.
     function resize(cssW, cssH) {
       // keep the same spot of the Moon in the middle of the screen when the window changes size
-      const midX = cam.x + VW / 2, midY = cam.y + VH / 2;
+      const midX = cam.x + vw() / 2, midY = cam.y + vh() / 2;
       VW = Math.max(200, Math.round(cssW)); VH = Math.max(200, Math.round(cssH));
-      cam.x = midX - VW / 2; cam.y = midY - VH / 2;
+      cam.x = midX - vw() / 2; cam.y = midY - vh() / 2;
       DPR = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(VW * DPR); canvas.height = Math.round(VH * DPR);
       moveTo(cam.x, cam.y);
@@ -38,14 +42,23 @@
     function setSafeArea(a) { Object.assign(safe, a); }
 
     // ---------- camera ----------
-    const clampX = (x) => (W <= VW ? (W - VW) / 2 : Math.max(0, Math.min(W - VW, x))); // centre the world if the screen is bigger
-    const clampY = (y) => (H <= VH ? (H - VH) / 2 : Math.max(0, Math.min(H - VH, y)));
+    const clampX = (x) => (W <= vw() ? (W - vw()) / 2 : Math.max(0, Math.min(W - vw(), x))); // centre the world if the screen is bigger
+    const clampY = (y) => (H <= vh() ? (H - vh()) / 2 : Math.max(0, Math.min(H - vh(), y)));
     function moveTo(x, y) { cam.x = clampX(x); cam.y = clampY(y); cam.flying = false; }
     function flyTo(x, y) { cam.tx = clampX(x); cam.ty = clampY(y); cam.flying = true; }
     // Centre a world point in the part of the screen that is NOT covered by panels.
     function centerOn(wx, wy, smooth) {
-      const sx = (safe.left + VW - safe.right) / 2, sy = (safe.top + VH - safe.bottom) / 2;
-      (smooth ? flyTo : moveTo)(wx - sx, wy - sy);
+      const sx = (safe.left + VW - safe.right) / 2, sy = (safe.top + VH - safe.bottom) / 2; // screen pixels
+      (smooth ? flyTo : moveTo)(wx - sx / zoom, wy - sy / zoom);
+    }
+    // Zoom in (factor > 1) or out (factor < 1), keeping the spot under the mouse in the same place.
+    function zoomAt(evt, factor) {
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * factor));
+      if (next === zoom) return;
+      const p = evt ? toCanvas(evt) : { x: VW / 2, y: VH / 2 };
+      const wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // world point under the mouse
+      zoom = next;
+      moveTo(wx - p.x / zoom, wy - p.y / zoom);
     }
     function centerOnBase(state, smooth) {
       const hab = state.modules.find((m) => m.type === 'hab');
@@ -55,11 +68,11 @@
     // Mouse position → canvas pixels (the canvas is scaled by CSS) → world tile.
     function toCanvas(evt) {
       const rect = canvas.getBoundingClientRect();
-      return { x: ((evt.clientX - rect.left) / rect.width) * VW, y: ((evt.clientY - rect.top) / rect.height) * VH, px: evt.clientX - rect.left, py: evt.clientY - rect.top, scale: VW / rect.width };
+      return { x: ((evt.clientX - rect.left) / rect.width) * VW, y: ((evt.clientY - rect.top) / rect.height) * VH, px: evt.clientX - rect.left, py: evt.clientY - rect.top, scale: VW / rect.width / zoom }; // scale: mouse pixels → world pixels (for dragging)
     }
     function tileAt(evt) {
       const p = toCanvas(evt);
-      return { c: Math.floor((p.x + cam.x) / T), r: Math.floor((p.y + cam.y) / T), px: p.px, py: p.py };
+      return { c: Math.floor((cam.x + p.x / zoom) / T), r: Math.floor((cam.y + p.y / zoom) / T), px: p.px, py: p.py };
     }
     function hitTag(evt) {
       if (!tagRect) return false;
@@ -321,14 +334,14 @@
         const vx = -0.78 * sp, vy = 0.62 * sp; // from the upper right, falling down-left
         const life = 0.55 + Math.random() * 0.9;
         // land somewhere in (or just around) the view
-        const lx = cam.x - 40 + Math.random() * (VW + 80), ly = cam.y - 20 + Math.random() * (VH + 40);
+        const lx = cam.x - 40 + Math.random() * (vw() + 80), ly = cam.y - 20 + Math.random() * (vh() + 40);
         spawn(3, lx - vx * life, ly - vy * life, vx, vy, life, Math.random() < 0.25 ? '#ffd6a0' : '#f2f6ff');
       }
     }
 
     // ---------- "back to base" tag on the edge of the view ----------
     function drawBaseTag(hc) {
-      const sx = hc.x - cam.x, sy = hc.y - cam.y; // base position on screen
+      const sx = (hc.x - cam.x) * zoom, sy = (hc.y - cam.y) * zoom; // base position on screen
       tagRect = null;
       const L = safe.left, R = VW - safe.right, Tp = safe.top, B = VH - safe.bottom; // visible map area
       if (sx > L + 30 && sx < R - 30 && sy > Tp + 30 && sy < B - 30) return; // base is visible
@@ -337,7 +350,7 @@
       const t = Math.min(mx / Math.max(1e-6, Math.abs(dx)), my / Math.max(1e-6, Math.abs(dy)));
       const px = ox + dx * t, py = oy + dy * t;
       const ang = Math.atan2(dy, dx);
-      const dist = Math.round((Math.hypot(sx - VW / 2, sy - VH / 2) / T) * METERS_PER_TILE / 10) * 10;
+      const dist = Math.round((Math.hypot(sx - VW / 2, sy - VH / 2) / zoom / T) * METERS_PER_TILE / 10) * 10;
       const pulse = 0.75 + 0.25 * Math.sin(time * 4);
       ctx.save();
       ctx.translate(px + Math.cos(ang) * 46, py + Math.sin(ang) * 20);
@@ -373,16 +386,18 @@
 
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.fillStyle = '#0b0e15'; ctx.fillRect(0, 0, VW, VH);
-      ctx.setTransform(DPR, 0, 0, DPR, -Math.round(cam.x) * DPR, -Math.round(cam.y) * DPR);
+      const S = DPR * zoom; // world pixels → device pixels
+      ctx.setTransform(S, 0, 0, S, -Math.round(cam.x * S), -Math.round(cam.y * S));
+      const VWz = vw(), VHz = vh(); // the part of the world on screen, in world pixels
       // only copy the part of the ground image the camera can see
       const gx = Math.max(0, Math.floor(cam.x)), gy = Math.max(0, Math.floor(cam.y));
-      const gw = Math.min(W - gx, VW + 2), gh = Math.min(H - gy, VH + 2);
+      const gw = Math.min(W - gx, Math.ceil(VWz) + 2), gh = Math.min(H - gy, Math.ceil(VHz) + 2);
       if (gw > 0 && gh > 0) ctx.drawImage(ground, gx, gy, gw, gh, gx, gy, gw, gh);
 
       // Terrain shadow: each zone gets darker as the Sun slides behind the hills (smooth, follows game time).
       // Only the tiles the camera can see are drawn, so a big map stays fast.
-      const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VW) / T));
-      const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VH) / T));
+      const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VWz) / T));
+      const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VHz) / T));
       const shadeOf = {
         ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
         plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
@@ -506,11 +521,11 @@
       // radiation storm particles stream in from the Sun's direction, across what the camera sees
       if (state.stormRate > C.rad.stormOn) {
         const n = Math.min(6, state.stormRate * 0.6 + 0.5);
-        const vx = cam.x + VW / 2, vy = cam.y + VH / 2;
+        const vx = cam.x + VWz / 2, vy = cam.y + VHz / 2;
         for (let k = 0; k < n; k++) {
           if (Math.random() > 0.5) continue;
-          const perp = (Math.random() - 0.5) * 1.6 * VW;
-          const sx = vx + sv.x * VW * 0.65 - sv.y * perp, sy = vy + sv.y * VW * 0.65 + sv.x * perp;
+          const perp = (Math.random() - 0.5) * 1.6 * VWz;
+          const sx = vx + sv.x * VWz * 0.65 - sv.y * perp, sy = vy + sv.y * VWz * 0.65 + sv.x * perp;
           const sp = 500 + Math.random() * 300;
           spawn(0, sx, sy, -sv.x * sp, -sv.y * sp, 2.2, Math.random() < 0.5 ? 'rgba(255,90,90,0.7)' : 'rgba(255,220,120,0.7)');
         }
@@ -616,13 +631,12 @@
       fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
     }
 
-    function reset() { ground = null; tagRect = null; for (const p of pool) p.alive = false; }
+    function reset() { ground = null; tagRect = null; zoom = 1; for (const p of pool) p.alive = false; }
     /** The astronaut drawn under the mouse (id), or null. */
     function crewAt(evt) {
-      const p = toCanvas(evt), wx = p.x + cam.x, wy = p.y + cam.y;
+      const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels
       let best = null, bd = 11;
       for (const a of Object.values(crew)) {
-
         if (!a.shown) continue;
         const d = Math.min(Math.hypot(a.x - wx, a.y - wy), Math.hypot(a.x - wx, a.y - 12 - wy)); // the dot or its number tag
         if (d < bd) { bd = d; best = a.id; }
@@ -631,10 +645,9 @@
     }
 
     return {
-      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, resize, setSafeArea,
-
+      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, resize, setSafeArea, zoomAt,
       panStart: () => ({ x: cam.x, y: cam.y }),
-      debug: () => ({ cam: { ...cam }, tag: tagRect, view: [VW, VH], world: [W, H] }),
+      debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
       panTo: (x, y) => moveTo(x, y),
     };
   }

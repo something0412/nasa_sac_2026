@@ -8,7 +8,11 @@
   let hover = null;
   let scenario = 'training';
 
-  const renderer = MT.Renderer(document.getElementById('map'), document.getElementById('forecast'));
+  // Top-down or isometric (2.5D) map: js/view.js picks which renderer draws. V or the 🧊 button switches.
+  const renderer = MT.ViewSwitch(document.getElementById('map'), document.getElementById('forecast'));
+  const viewBtn = document.getElementById('viewBtn');
+  viewBtn.addEventListener('click', () => renderer.toggleView());
+  renderer.onViewChange((v) => { viewBtn.textContent = v === 'iso' ? '🗺️ Top view' : '🧊 2.5D view'; });
   /** The astronaut the player picked (always first: then what to build or use). */
   const picked = () => (state && ui.selectedCrew ? MT.Sim.crewById(state, ui.selectedCrew) : null);
   const warn = (title, text) => ui.capcom({ level: 'warn', title, text });
@@ -178,6 +182,13 @@
   canvas.addEventListener('pointerleave', () => { if (!press) { hover = null; ui.tooltip(state, null, false); } });
   // Right click: cancel the building choice first, then un-pick the astronaut.
   canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); if (ui.selected) ui.select(null); else ui.selectCrew(null); });
+  // Scroll wheel = zoom in/out around the mouse (both views). Each wheel notch is about 15%.
+  canvas.addEventListener('wheel', (e) => {
+    if (!renderer.canZoom()) return;
+    e.preventDefault();
+    renderer.zoomAt(e, Math.exp(-Math.max(-300, Math.min(300, e.deltaY)) * 0.0015));
+    hover = renderer.tileAt(e);
+  }, { passive: false });
 
   // Every click that sends an astronaut somewhere needs a picked astronaut, so the player controls who goes where.
   function onMapClick(e) {
@@ -248,6 +259,8 @@
     else if (crewKey && crewKey <= MT.CONFIG.crew) ui.selectCrew(ui.selectedCrew === crewKey ? null : crewKey); // Shift+1..4 = pick an astronaut
 
     else if (e.key === 'h' || e.key === 'H') renderer.centerOnBase(state, true);
+    else if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) { renderer.toggleView(); hover = null; }
+    else if ((e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_') && !e.ctrlKey && !e.metaKey) renderer.zoomAt(null, e.key === '-' || e.key === '_' ? 1 / 1.25 : 1.25);
     else if (/^[1-9]$/.test(e.key) && +e.key <= MT.CONFIG.buildOrder.length) ui.pickBuild(MT.CONFIG.buildOrder[+e.key - 1]);
     else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       const panel = { s: 'supplies', b: 'build', a: 'ams', w: 'why', c: 'capcom', l: 'log' }[e.key.toLowerCase()];

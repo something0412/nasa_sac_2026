@@ -1,0 +1,52 @@
+// Map view switch: top-down (render.js) or isometric 2.5D (render_iso.js).
+// Gives main.js ONE renderer object with the usual functions (draw, tileAt, ...) and sends each call to
+// whichever view is showing. Press V (or the 🧊 button) to switch. The player's choice is remembered.
+(function (root) {
+  'use strict';
+  const MT = (root.MT = root.MT || {});
+
+  const DEFAULT_VIEW = 'top'; // change to 'iso' to make the 2.5D view the default for new players
+  const STORE_KEY = 'mt.view';
+
+  function ViewSwitch(canvas, forecastCanvas) {
+    const views = { top: MT.Renderer(canvas, forecastCanvas), iso: MT.IsoRenderer(canvas) };
+    let name = DEFAULT_VIEW;
+    try { const saved = root.localStorage.getItem(STORE_KEY); if (views[saved]) name = saved; } catch (e) { /* storage blocked: use default */ }
+    let lastState = null;
+    const listeners = [];
+    const cur = () => views[name];
+    const both = (fn) => (...args) => { views.top[fn](...args); views.iso[fn](...args); };
+
+    function set(next) {
+      if (!views[next] || next === name) return;
+      name = next;
+      try { root.localStorage.setItem(STORE_KEY, name); } catch (e) { /* not saved: fine */ }
+      if (lastState) cur().centerOnBase(lastState, false); // open the new view looking at the base
+      listeners.forEach((fn) => fn(name));
+    }
+
+    return {
+      draw: (state, dt, ui) => { lastState = state; cur().draw(state, dt, ui); },
+      drawForecast: (state) => views.top.drawForecast(state), // the sunlight strip is the same in both views
+      tileAt: (e) => cur().tileAt(e),
+      toCanvas: (e) => cur().toCanvas(e),
+      hitTag: (e) => cur().hitTag(e),
+      crewAt: (e) => (cur().crewAt ? cur().crewAt(e) : null), // the astronaut under the mouse (click to pick them)
+      centerOnBase: (state, smooth) => cur().centerOnBase(state, smooth),
+      panStart: () => cur().panStart(),
+      panTo: (x, y) => cur().panTo(x, y),
+      zoomAt: (e, factor) => { if (cur().zoomAt) cur().zoomAt(e, factor); },
+      canZoom: () => !!cur().zoomAt,
+      debug: () => ({ view: name, ...cur().debug() }),
+      reset: both('reset'),
+      resize: both('resize'),
+      setSafeArea: both('setSafeArea'),
+      view: () => name,
+      setView: set,
+      toggleView: () => set(name === 'top' ? 'iso' : 'top'),
+      onViewChange: (fn) => { listeners.push(fn); fn(name); },
+    };
+  }
+
+  MT.ViewSwitch = ViewSwitch;
+})(window);

@@ -26,6 +26,8 @@ map, or Shift+1-4), then pick what they do:
 
 With nobody picked, click a module to turn it ON/OFF, or a building site to cancel it (parts back).
 Space = pause. Esc / right-click = stop building, then un-pick the astronaut.
+V (or the 🧊 button) = switch between the top-down and the 2.5D isometric view; scroll wheel or +/- = zoom.
+
 Drag the map to look around (the world is 80 x 56 tiles, the view shows 20 x 14). If the base is off-screen,
 a 🏠 BASE tag on the edge points the way; click it or press H to fly back.
 The map fills the whole window. The top bar has the speed buttons, the sunlight forecast and the day.

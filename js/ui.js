@@ -273,6 +273,30 @@
       g.fillStyle = 'rgba(18,23,34,0.85)'; g.fillRect(0, 0, 300, 16); g.fillStyle = '#c9d1dc'; g.fillText('blue band = plain in shadow · red line = radiation storm', 6, 11);
     }
 
+    // ----- every frame: clock + countdown bar (only touches the DOM when the text really changes) -----
+    const fmtLeft = (hrs) => {
+      const mins = Math.max(0, Math.ceil((hrs * 60) / 5) * 5); // 5-minute steps
+      const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+      if (d) return `${d} d ${h} h`;
+      if (h) return `${h} h ${String(m).padStart(2, '0')} min`;
+      return `${m} min`;
+    };
+    const setText = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+    let lastBar = '';
+    function live(state, frac) {
+      const now = state.hour + frac;
+      const mins = Math.floor((frac * 60) / 10) * 10;
+      setText($('clockDay'), `Day ${Math.min(30, Math.floor(state.hour / 24) + 1)} / 30`);
+      setText($('clockHour'), String(state.hour % 24).padStart(2, '0') + ':' + String(mins).padStart(2, '0'));
+      const items = state.status === 'running' ? MT.Sim.upcoming(state, now) : [];
+      const html = items.length
+        ? items.map((it) => {
+          const pct = Math.max(0, Math.min(100, (1 - it.left / it.total) * 100));
+          return `<div class="cd ${it.level}"><span class="cdIco">${it.icon}</span><span class="cdText">${esc(it.label)} <b>${fmtLeft(it.left)}</b></span><span class="cdTrack"><span style="width:${pct.toFixed(1)}%"></span></span></div>`;
+        }).join('')
+        : '<div class="cd info"><span class="cdIco">✅</span><span class="cdText">Nothing incoming right now.</span></div>';
+      if (html !== lastBar) { $('countdowns').innerHTML = html; lastBar = html; }
+
     return { update, capcom, setSpeed, tooltip, showStart, showEvent, showDebrief, showTower, isModalOpen, select, get selected() { return selected; } };
   }
 

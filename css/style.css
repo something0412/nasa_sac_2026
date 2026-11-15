@@ -143,3 +143,20 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .choices, .choices.three { grid-template-columns: 1fr; }
   .brand .sub { display: none; }
 }
+
+/* countdown status bar under the header */
+.countdowns { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 12px; max-width: 1280px; margin: 0 auto; min-height: 50px; }
+.cd { display: flex; align-items: center; gap: 8px; flex: 1 1 280px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; position: relative; overflow: hidden; }
+.cdIco { font-size: 18px; }
+.cdText { font-size: 13px; flex: 1; }
+.cdText b { font-variant-numeric: tabular-nums; font-size: 15px; margin-left: 2px; }
+.cdTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: #0d121b; }
+.cdTrack span { display: block; height: 100%; background: var(--accent); }
+.cd.bad { border-color: #6b2626; background: #2a1416; }
+.cd.bad .cdTrack span { background: var(--bad); }
+.cd.bad .cdText b { color: #ffb3b3; }
+.cd.warn { border-color: #6b5016; }
+.cd.warn .cdTrack span { background: var(--warn); }
+.cd.bad { animation: cdPulse 1.6s ease-in-out infinite; }
+@keyframes cdPulse { 50% { background: #3a1719; } }
+@media (prefers-reduced-motion: reduce) { .cd.bad { animation: none; } }

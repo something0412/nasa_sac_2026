@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const MT = window.MT;
-  const MS_PER_HOUR = 400; // at 1x speed, 30 days = about 5 minutes
+  const MS_PER_HOUR = 4000; // 1x speed: 4 real seconds = 1 game hour (30 days = 48 min; ▶▶ 24 min; ▶▶▶ 12 min)
 
   let state = null, speed = 1, lastSpeed = 1, acc = 0, last = performance.now();
   let queue = []; // events waiting for a pop-up
@@ -74,7 +74,12 @@
       let n = 0;
       while (acc >= MS_PER_HOUR && n < 8 && speed > 0) { acc -= MS_PER_HOUR; tick(); n++; }
     }
-    if (state) renderer.draw(state, dt, { hover, buildType: ui.selected });
+    if (state) {
+      // How far we are into the current game hour (0..1). Used for smooth Sun movement, the clock and countdowns.
+      const frac = state.status === 'running' ? Math.min(0.999, acc / MS_PER_HOUR) : 0;
+      renderer.draw(state, dt, { hover, buildType: ui.selected, frac });
+      ui.live(state, frac);
+    }
     requestAnimationFrame(frame);
   }
 

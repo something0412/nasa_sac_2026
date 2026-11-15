@@ -1,6 +1,7 @@
-# Junior Astronaut Mission Trainer: Shackleton Base
+# Lunar World
 
-A 2D browser game for NASA Space Apps 2026. You run a Moon base at the lunar south pole and keep
+A 2D browser game for NASA Space Apps 2026 (challenge: *Build a Junior Astronaut Mission Trainer*).
+You run Shackleton Base, a Moon base at the lunar south pole, and keep
 4 astronauts alive for 30 days by balancing **power, oxygen, water, food and radiation**.
 
 ## Play it

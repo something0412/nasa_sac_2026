@@ -3,7 +3,7 @@
 // picks which part we see. Drag the map to move the camera.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const POOL_SIZE = 420;
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
@@ -39,10 +39,10 @@
     g.beginPath(); g.arc(x, y, r * 1.04, Math.PI * 0.85, Math.PI * 1.65); g.strokeStyle = 'rgba(255,255,255,0.2)'; g.stroke();
     g.beginPath(); g.arc(x, y, r * 1.1, -Math.PI * 0.15, Math.PI * 0.65); g.strokeStyle = 'rgba(0,0,0,0.12)'; g.stroke();
   }
-  MT.drawCrater = drawCrater;
+  LW.drawCrater = drawCrater;
 
   function Renderer(canvas, forecastCanvas) {
-    const C = MT.CONFIG, T = C.map.tile;
+    const C = LW.CONFIG, T = C.map.tile;
     const W = C.map.cols * T, H = C.map.rows * T; // world size
     let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
     // ZOOM: 1 = normal, 2 = everything twice as big. The camera then sees VW / zoom world pixels across.
@@ -123,7 +123,7 @@
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
       zonePaths = { ridge: new Path2D(), plain: new Path2D(), ice: new Path2D() };
       for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) {
-        zonePaths[MT.Sim.zoneOf(state, c, r)].rect(c * T, r * T, T, T);
+        zonePaths[LW.Sim.zoneOf(state, c, r)].rect(c * T, r * T, T, T);
       }
       for (const z of ['plain', 'ridge', 'ice']) { g.fillStyle = C.zones[z].color; g.fill(zonePaths[z]); }
       const area = (W * H) / (800 * 560);
@@ -166,10 +166,10 @@
     const center = (m) => ({ x: (m.c + m.w / 2) * T, y: (m.r + m.h / 2) * T });
     // Direction the sunlight comes FROM (unit vector, screen coords). Smooth between game hours.
     const sunVec = (state) => {
-      const a = (MT.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
+      const a = (LW.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
       return { x: Math.cos(a), y: Math.sin(a) };
     };
-    const lightAt = (state, m) => MT.Sim.zoneLight(state, MT.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
+    const lightAt = (state, m) => LW.Sim.zoneLight(state, LW.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
 
     function hull(pts) {
       pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -221,7 +221,7 @@
           break;
         }
         case 'battery': {
-          const cap = MT.Sim.batteryCap(state) || 1;
+          const cap = LW.Sim.batteryCap(state) || 1;
           const f = state.res.battery / cap;
           ctx.fillStyle = '#2a2f38'; ctx.fillRect(x + 8, y + 7, 24, 28);
           ctx.fillStyle = '#596273'; ctx.fillRect(x + 15, y + 4, 10, 4);
@@ -286,7 +286,7 @@
           ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
           ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
           ctx.restore();
-          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          if (m.built && blink && !LW.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
           break;
         }
         case 'lab': {
@@ -306,7 +306,7 @@
 
       // Research boost: small "2x" badge on machines that get an upgrade (close enough to a Research Bay).
       if (m.built && C.research.targets.includes(m.type)) {
-        const b = MT.Sim.boostOf(state, m);
+        const b = LW.Sim.boostOf(state, m);
         if (b > 1) {
           ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x + 2, y + 2, 20, 11, 3); ctx.fill();
           ctx.fillStyle = '#6fd3ff'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(b + 'x', x + 12, y + 10.5);
@@ -327,7 +327,7 @@
       } else if (!m.on) {
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y, w, h);
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', x + w / 2, y + h / 2 + 4);
-      } else if (MT.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
+      } else if (LW.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
         ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fillRect(x, y, w, h);
         if (blink) { ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillText('⚡', x + w - 9, y + 15); }
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
@@ -429,15 +429,15 @@
       const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VWz) / T));
       const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VHz) / T));
       const shadeOf = {
-        ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
-        plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
+        ridge: 0.75 * (1 - LW.Sim.zoneLight(state, 'ridge', state.hour + frac)),
+        plain: 0.75 * (1 - LW.Sim.zoneLight(state, 'plain', state.hour + frac)),
         ice: 0.35,
       };
       for (const z of ['ridge', 'plain', 'ice']) {
         if (shadeOf[z] < 0.005) continue;
         ctx.fillStyle = z === 'ice' ? 'rgba(5,8,25,0.35)' : `rgba(5,8,20,${shadeOf[z].toFixed(3)})`;
         for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-          if (MT.Sim.zoneOf(state, c, r) === z) ctx.fillRect(c * T, r * T, T, T);
+          if (LW.Sim.zoneOf(state, c, r) === z) ctx.fillRect(c * T, r * T, T, T);
         }
       }
 
@@ -469,10 +469,10 @@
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
-        } else if (m.type === 'shelter' || !MT.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
+        } else if (m.type === 'shelter' || !LW.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
         else { color = !m.on ? '#4a4f5a' : m.powered ? '#ffd36b' : '#ff5d5d'; flow = m.on && m.powered ? -1 : 0; }
         ctx.strokeStyle = color;
-        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
+        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !LW.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
       }
@@ -482,10 +482,10 @@
 
       // Research Bay reach (dashed circle): while placing one, hovering one, or with the Scientist picked.
       const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
-      const hoverM = ui.hover && !ui.buildType ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
+      const hoverM = ui.hover && !ui.buildType ? LW.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
       const rings = [];
       if (ui.buildType === 'lab' && ui.hover) rings.push({ x: (ui.hover.c + 0.5) * T, y: (ui.hover.r + 0.5) * T });
-      for (const l of MT.Sim.built(state, 'lab')) {
+      for (const l of LW.Sim.built(state, 'lab')) {
         if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...center(l), dead: l.damaged });
       }
       for (const g of rings) {
@@ -496,7 +496,7 @@
         ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       // The picked Engineer's job sites get a dashed outline in their role colour.
-      const jobs = MT.Sim.jobList(state);
+      const jobs = LW.Sim.jobList(state);
       if (picked) {
         ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
         for (const j of jobs) if (j.assignee === picked.id) {
@@ -507,7 +507,7 @@
       }
 
       // astronauts: each one walks to where the AMS says they are (job site, gym, lab, greenhouse, tower, shelter or the habitat)
-      const shelter = MT.Sim.built(state, 'shelter')[0];
+      const shelter = LW.Sim.built(state, 'shelter')[0];
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
@@ -534,13 +534,13 @@
         a.id = A.id;
         a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
-        const exposed = MT.Sim.isExposed(A);
+        const exposed = LW.Sim.isExposed(A);
         if (sel) { // picked: pulsing gold ring
           ctx.beginPath(); ctx.arc(a.x, a.y, 9 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
           ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
         }
         ctx.beginPath(); ctx.arc(a.x, a.y, 4.5, 0, Math.PI * 2);
-        ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
+        ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : LW.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
         ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
         // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
@@ -602,13 +602,13 @@
         const { c, r } = ui.hover;
         if (ui.buildType) {
           const d = C.modules[ui.buildType];
-          const ok = MT.Sim.canPlace(state, ui.buildType, c, r).ok;
+          const ok = LW.Sim.canPlace(state, ui.buildType, c, r).ok;
           ctx.fillStyle = ok ? 'rgba(95,224,138,0.25)' : 'rgba(255,93,93,0.25)';
           ctx.fillRect(c * T, r * T, d.w * T, d.h * T);
           ctx.strokeStyle = ok ? '#5fe08a' : '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(c * T + 1, r * T + 1, d.w * T - 2, d.h * T - 2);
           ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(d.icon, c * T + T / 2, r * T + T / 2 + 7);
         } else {
-          const m = MT.Sim.moduleAt(state, c, r);
+          const m = LW.Sim.moduleAt(state, c, r);
           ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
           if (m) ctx.strokeRect(m.c * T + 1, m.r * T + 1, m.w * T - 2, m.h * T - 2);
           else ctx.strokeRect(c * T + 1, r * T + 1, T - 2, T - 2);
@@ -634,7 +634,7 @@
         const y = top + i * (rowH + gap);
         fctx.fillStyle = '#c9d1dc'; fctx.font = '10px system-ui'; fctx.textAlign = 'left'; fctx.fillText(label, 2, y + 9);
         for (let h = 0; h < total; h++) {
-          let c = mix(dark, sun, MT.Sim.zoneLight(state, z, h + 0.5));
+          let c = mix(dark, sun, LW.Sim.zoneLight(state, z, h + 0.5));
           if (h < state.hour) c = mix(c, [16, 20, 28], 0.5); // the past is dimmed
           fctx.fillStyle = rgb(c);
           fctx.fillRect(left + (h / total) * w, y, w / total + 0.6, rowH);
@@ -682,5 +682,5 @@
     };
   }
 
-  MT.Renderer = Renderer;
+  LW.Renderer = Renderer;
 })(window);

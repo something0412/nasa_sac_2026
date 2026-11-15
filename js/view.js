@@ -3,13 +3,15 @@
 // whichever view is showing. Press V (or the 🧊 button) to switch. The player's choice is remembered.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const DEFAULT_VIEW = 'top'; // change to 'iso' to make the 2.5D view the default for new players
-  const STORE_KEY = 'mt.view';
+  const STORE_KEY = 'lunar-world.view';
+  // Settings used to be stored as 'mt.view' (old name of the game); move them over once.
+  try { if (localStorage.getItem(STORE_KEY) === null && localStorage.getItem('mt.view') !== null) { localStorage.setItem(STORE_KEY, localStorage.getItem('mt.view')); localStorage.removeItem('mt.view'); } } catch (e) { /* storage blocked: fine */ }
 
   function ViewSwitch(canvas, forecastCanvas) {
-    const views = { top: MT.Renderer(canvas, forecastCanvas), iso: MT.IsoRenderer(canvas) };
+    const views = { top: LW.Renderer(canvas, forecastCanvas), iso: LW.IsoRenderer(canvas) };
     let name = DEFAULT_VIEW;
     try { const saved = root.localStorage.getItem(STORE_KEY); if (views[saved]) name = saved; } catch (e) { /* storage blocked: use default */ }
     let lastState = null;
@@ -48,5 +50,5 @@
     };
   }
 
-  MT.ViewSwitch = ViewSwitch;
+  LW.ViewSwitch = ViewSwitch;
 })(window);

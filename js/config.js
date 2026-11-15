@@ -2,9 +2,9 @@
 // "REAL" = from a NASA/science source. "GAME" = tuned for fun, but in a realistic range.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
-  MT.CONFIG = {
+  LW.CONFIG = {
     missionHours: 720, // 30 days
     crew: 4,
     // Every job (new building, repair, moon-dirt shield) gets exactly ONE astronaut: the Engineer the player

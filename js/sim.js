@@ -1,8 +1,8 @@
 // Simulation: the rules of the outpost. No drawing, no DOM. One step() = one game hour.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
-  const cfg = () => MT.CONFIG;
+  const LW = (root.LW = root.LW || {});
+  const cfg = () => LW.CONFIG;
 
   // ---------- helpers ----------
   function rng(seed) {
@@ -1235,7 +1235,7 @@
     return out.sort((a, b) => a.left - b.left);
   }
 
-  MT.Sim = {
+  LW.Sim = {
     upcoming, stormRateAt,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo, orderRepair, startHeal, healAmount, maxHp,
     useTower, towerReadyIn, startResearch, resumeTask, researchCost, plannedLevel, tendGreenhouse, sendToGym, assignWorker, boostOf, inLabRange, solarKw,

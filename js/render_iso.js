@@ -7,13 +7,13 @@
 //   world (x, y)  = pixels on the big isometric picture (see js/iso.js). The camera shows part of it.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const POOL_SIZE = 420;
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
 
   function IsoRenderer(canvas) {
-    const C = MT.CONFIG, Iso = MT.Iso;
+    const C = LW.CONFIG, Iso = LW.Iso;
     const COLS = C.map.cols, ROWS = C.map.rows;
     const HW = Iso.TILE_W / 2, HH = Iso.TILE_H / 2;
     const WORLD = Iso.worldSize(COLS, ROWS), W = WORLD.w, H = WORLD.h;
@@ -117,7 +117,7 @@
     const zoneAt = (c, r) => ZONE_NAMES[zoneGrid[r * COLS + c]];
     function buildGround(state) {
       zoneGrid = new Uint8Array(COLS * ROWS);
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) zoneGrid[r * COLS + c] = ZONE_IDS[MT.Sim.zoneOf(state, c, r)];
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) zoneGrid[r * COLS + c] = ZONE_IDS[LW.Sim.zoneOf(state, c, r)];
 
       const off = document.createElement('canvas');
       off.width = W; off.height = H;
@@ -146,7 +146,7 @@
       const craters = [];
       for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
-      for (const k of craters) MT.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
+      for (const k of craters) LW.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
       g.restore();
       g.save(); g.clip(paths.ice);
       for (let i = 0; i < 260 * area; i++) {
@@ -197,10 +197,10 @@
 
     // Direction the sunlight comes FROM, in grid squares (unit length). Smooth between game hours.
     const sunGrid = (state) => {
-      const a = (MT.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
+      const a = (LW.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
       return { c: Math.cos(a), r: Math.sin(a) };
     };
-    const lightAt = (state, m) => MT.Sim.zoneLight(state, MT.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
+    const lightAt = (state, m) => LW.Sim.zoneLight(state, LW.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
 
     function hull(pts) {
       pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -271,7 +271,7 @@
           break;
         }
         case 'battery': {
-          const cap = MT.Sim.batteryCap(state) || 1;
+          const cap = LW.Sim.batteryCap(state) || 1;
           const fr = Math.max(0, Math.min(1, state.res.battery / cap));
           const f = footprint(m.c, m.r, 1, 1, 0.24);
           prism(f, ht, '#3a414d', '#22272f', '#2a2f38', '#8a93a3');
@@ -352,7 +352,7 @@
           ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -9, 5, 9);
           ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 8);
           ctx.restore();
-          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(f[1].x - 4, f[1].y - 16, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          if (m.built && blink && !LW.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(f[1].x - 4, f[1].y - 16, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
           break;
         }
         case 'lab': {
@@ -390,7 +390,7 @@
       } else if (!m.on) {
         poly(f); ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', ctr.x, ctr.y - ht - 4);
-      } else if (MT.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
+      } else if (LW.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
         poly(f); ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fill();
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke();
         if (blink) icon('⚡', 16);
@@ -414,7 +414,7 @@
       }
       // Research boost: "1.5x" / "2x" badge above machines close enough to a Research Bay.
       if (m.built && C.research.targets.includes(m.type)) {
-        const b = MT.Sim.boostOf(state, m);
+        const b = LW.Sim.boostOf(state, m);
         if (b > 1) {
           const x = ctr.x - HW * 0.5, y = ctr.y - ht - 10;
           ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x - 10, y - 8, 20, 11, 3); ctx.fill();
@@ -433,7 +433,7 @@
         const k = 1 + Math.sin(time * 5) * 0.15;
         ctx.beginPath(); ctx.ellipse(p.x, p.y, 11 * k, 5.5 * k, 0, 0, Math.PI * 2); ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
       }
-      const body = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
+      const body = exposed && danger && blink ? '#ff5d5d' : LW.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
       ctx.fillStyle = body; ctx.beginPath(); ctx.roundRect(p.x - 3.5, p.y - 10, 7, 9, 3); ctx.fill(); // suit
       ctx.beginPath(); ctx.arc(p.x, p.y - 12.5, 4, 0, Math.PI * 2); ctx.fill(); // helmet
       ctx.beginPath(); ctx.arc(p.x + 1.2, p.y - 13, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill(); // visor
@@ -517,8 +517,8 @@
       const c0 = Math.max(0, Math.min(...corners.map((g) => g.c)) - 1), c1 = Math.min(COLS - 1, Math.max(...corners.map((g) => g.c)) + 1);
       const r0 = Math.max(0, Math.min(...corners.map((g) => g.r)) - 1), r1 = Math.min(ROWS - 1, Math.max(...corners.map((g) => g.r)) + 1);
       const shadeOf = {
-        ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
-        plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
+        ridge: 0.75 * (1 - LW.Sim.zoneLight(state, 'ridge', state.hour + frac)),
+        plain: 0.75 * (1 - LW.Sim.zoneLight(state, 'plain', state.hour + frac)),
         ice: 0.35,
       };
       for (const z of ['ridge', 'plain', 'ice']) {
@@ -561,10 +561,10 @@
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
-        } else if (m.type === 'shelter' || !MT.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
+        } else if (m.type === 'shelter' || !LW.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
         else { color = !m.on ? '#4a4f5a' : m.powered ? '#ffd36b' : '#ff5d5d'; flow = m.on && m.powered ? -1 : 0; }
         ctx.strokeStyle = color;
-        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
+        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !LW.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
       }
@@ -573,10 +573,10 @@
       // Research Bay reach (dashed ring on the ground): while placing one, hovering one, or with the Scientist
       // picked. A circle of R squares on the grid is an ellipse √2·R·HW wide and √2·R·HH tall on screen.
       const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
-      const hoverM = ui.hover && !ui.buildType && Iso.inMap(ui.hover.c, ui.hover.r, COLS, ROWS) ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
+      const hoverM = ui.hover && !ui.buildType && Iso.inMap(ui.hover.c, ui.hover.r, COLS, ROWS) ? LW.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
       const rings = [];
       if (ui.buildType === 'lab' && ui.hover) rings.push({ ...P(ui.hover.c + 0.5, ui.hover.r + 0.5) });
-      for (const l of MT.Sim.built(state, 'lab')) {
+      for (const l of LW.Sim.built(state, 'lab')) {
         if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...mid(l), dead: l.damaged });
       }
       for (const g of rings) {
@@ -588,7 +588,7 @@
         ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       // The picked Engineer's job sites get a dashed outline in their role colour.
-      const jobs = MT.Sim.jobList(state);
+      const jobs = LW.Sim.jobList(state);
       if (picked) {
         ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
         for (const j of jobs) if (j.assignee === picked.id) { const m = j.m || habM; poly(footprint(m.c, m.r, m.w, m.h, -0.06)); ctx.stroke(); }
@@ -596,7 +596,7 @@
       }
 
       // Astronauts: work out where each one is (in grid squares), walking toward where the AMS says they are.
-      const shelter = MT.Sim.built(state, 'shelter')[0];
+      const shelter = LW.Sim.built(state, 'shelter')[0];
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       const hcg = { c: habM.c + habM.w / 2, r: habM.r + habM.h / 2 };
       const gmid = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
@@ -626,7 +626,7 @@
         a.id = A.id;
         a.shown = !A.medbay && (visible || d * PX_PER_TILE >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
-        people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, MT.Sim.isExposed(A), danger, blink, sel) });
+        people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, LW.Sim.isExposed(A), danger, blink, sel) });
       });
 
       // Draw buildings and people from the back of the map to the front, so nearer things cover farther ones.
@@ -688,14 +688,14 @@
         const { c, r } = ui.hover;
         if (ui.buildType) {
           const d = C.modules[ui.buildType];
-          const ok = MT.Sim.canPlace(state, ui.buildType, c, r).ok;
+          const ok = LW.Sim.canPlace(state, ui.buildType, c, r).ok;
           const f = footprint(c, r, d.w, d.h, 0);
           poly(f); ctx.fillStyle = ok ? 'rgba(95,224,138,0.25)' : 'rgba(255,93,93,0.25)'; ctx.fill();
           ctx.strokeStyle = ok ? '#5fe08a' : '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke();
           const p = P(c + d.w / 2, r + d.h / 2);
           ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(d.icon, p.x, p.y + 7);
         } else {
-          const m = MT.Sim.moduleAt(state, c, r);
+          const m = LW.Sim.moduleAt(state, c, r);
           ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
           poly(m ? footprint(m.c, m.r, m.w, m.h, 0) : footprint(c, r, 1, 1, 0)); ctx.stroke();
         }
@@ -730,5 +730,5 @@
     };
   }
 
-  MT.IsoRenderer = IsoRenderer;
+  LW.IsoRenderer = IsoRenderer;
 })(window);

@@ -56,26 +56,37 @@
     return (extraMicroGyPerH / 1000) * k.sky * k.rbe;
   }
 
+  /**
+   * Space weather for the first 30 days. The game is endless: extendWorld() adds random 30-day chunks
+   * (randomWeather) after that, in both scenarios.
+   */
   function buildSpaceWeather(kind, rand) {
-    const R = cfg().rad.storm;
+    const R = cfg().rad.storm, CH = cfg().chunkH;
     if (kind === 'history' && root.MAY2024) {
       const d = root.MAY2024;
       const lab = radlab();
+      const curve = !!(lab && lab.may2024);
       return {
-        flares: d.flares.filter((f) => f.h < cfg().missionHours).map((f) => ({ h: f.h, cls: f.cls, date: f.t })),
+        flares: d.flares.filter((f) => f.h < CH).map((f) => ({ h: f.h, cls: f.cls, date: f.t })),
         // DONKI storm times drive the warnings; the dose itself comes hour by hour from LRO (radCurve).
-        storms: d.sepStorms.map((s) => ({ h: s.h, strong: s.strong, date: s.t, ...(s.strong ? R.strong : R.moderate) })),
-        geomag: d.geomagStorms.filter((g) => g.h < cfg().missionHours),
-        radCurve: lab && lab.may2024 ? lab.may2024.extra : null,
+        storms: d.sepStorms.map((s) => ({ h: s.h, strong: s.strong, date: s.t, curve, ...(s.strong ? R.strong : R.moderate) })),
+        geomag: d.geomagStorms.filter((g) => g.h < CH),
+        radCurve: curve ? lab.may2024.extra : null,
         // REAL: the Eta Aquariid meteor shower (dust from Halley's Comet) peaked around 5 May 2024.
         // The Moon travels with Earth, so it crosses the same dust (NASA watches for impact flashes on the Moon).
         meteors: [{ h: 96, dur: 6, name: 'Eta Aquariids', date: '2024-05-05' }],
       };
     }
-    // Random training mission: flares every 1-3 days. Bigger flares are more likely to send particles.
+    return { ...randomWeather(rand, 0, CH), geomag: [], radCurve: null };
+  }
+
+  /** Random space weather for the hours h0 .. h0 + len (a 30-day chunk). */
+  function randomWeather(rand, h0, len) {
+    const R = cfg().rad.storm;
+    // Flares every 1-3 days. Bigger flares are more likely to send particles.
     const flares = [], storms = [];
-    let h = 20 + rand() * 30;
-    while (h < cfg().missionHours - 30) {
+    let h = h0 + 20 + rand() * 30;
+    while (h < h0 + len - 30) {
       const big = rand();
       const cls = big < 0.6 ? 'M' + (1 + rand() * 8.9).toFixed(1) : 'X' + (1 + rand() * (big > 0.93 ? 8 : 3)).toFixed(1);
       flares.push({ h: round1(h), cls });
@@ -87,7 +98,7 @@
       }
       h += 24 + rand() * 48;
     }
-    // Make sure every mission has at least one strong storm (so the shelter matters).
+    // Make sure every 30 days have at least one strong storm (so the shelter matters).
     if (!storms.some((s) => s.strong)) {
       const f = flares[Math.floor(flares.length * (0.35 + rand() * 0.3))];
       f.cls = 'X' + (5 + rand() * 4).toFixed(1);
@@ -100,10 +111,49 @@
     const meteors = [];
     const nMet = 1 + (rand() < 0.5 ? 1 : 0);
     for (let i = 0; i < nMet; i++) {
-      meteors.push({ h: Math.round(60 + rand() * (cfg().missionHours - 130)), dur: 4 + Math.floor(rand() * 3), name: SHOWERS[Math.floor(rand() * SHOWERS.length)] });
+      meteors.push({ h: h0 + Math.round(60 + rand() * (len - 130)), dur: 4 + Math.floor(rand() * 3), name: SHOWERS[Math.floor(rand() * SHOWERS.length)] });
     }
     meteors.sort((a, b) => a.h - b.h);
-    return { flares, storms, geomag: [], radCurve: null, meteors };
+    return { flares, storms, meteors };
+  }
+
+  /**
+   * The game never ends by itself, so the world is made ahead of time, a bit at a time: the sunlight
+   * forecast, space weather (30 days per chunk), cargo landers every 10 days and crew ships every 30 days.
+   * Always covers at least one forecast window (30 days) past the current hour.
+   */
+  function extendWorld(state) {
+    const C = cfg(), CH = C.chunkH, E = C.endless, need = state.hour + CH + 48;
+    for (const z of Object.keys(C.zones)) {
+      const L = state.light[z];
+      while (L.length < need) L.push(zoneLitAt(state, z, L.length + 0.5));
+    }
+    while (state.wxUntil < need) {
+      const k = state.wxUntil / CH;
+      const wx = randomWeather(rng((state.seed ^ Math.imul(k, 0x9e3779b1)) >>> 0), state.wxUntil, CH);
+      state.flares.push(...wx.flares); state.storms.push(...wx.storms); state.meteors.push(...wx.meteors);
+      state.wxUntil += CH;
+    }
+    let last = state.cargo.length ? state.cargo[state.cargo.length - 1].h : 0;
+    while (last + C.cargoEveryH < need) { last += C.cargoEveryH; state.cargo.push({ h: last, choice: null, asked: false, arrived: false }); }
+    let ship = state.ships.length ? state.ships[state.ships.length - 1].h : 0;
+    while (ship + E.shipEveryH < need) { ship += E.shipEveryH; state.ships.push({ h: ship, warned: false, arrived: false }); }
+  }
+
+  /** A new astronaut (the first 4 at the start; 2 more with every crew spaceship). */
+  function newAstronaut(id, name, role, homeId, sinceGym) {
+    return {
+      id, name, role, homeId, hp: 100, dose: 0, injury: 0, stress: 0, bone: 100,
+      task: null, // a 1-day job inside a building, or a tower visit: { kind: 'lab'|'greenhouse'|'tower', id, left, total, target? }
+      paused: null, // research / greenhouse work put on hold by the shelter (resumes when the player sends them back)
+      trip: false, // riding the rover to another HAB
+      accidents: 0, // injuries from lab micro-explosions or farming tools
+      where: 'hab', job: null, gymLeft: 0, gymId: null, sinceGym: sinceGym || 0,
+      medbay: false, medbayAt: null, medbayWhy: null, hits: 0, injuries: 0, warnedHp: 0,
+      wounds: [], // each injury separately: { hp, what, h } (the medbay heals the smallest one)
+      heal: null, // while resting in the medbay: { left, total, amount }
+      boneTier: 0, // 0 ok, 1 fragile (<50%), 2 severe (<25%): for one-time warnings
+    };
   }
 
   /**
@@ -142,16 +192,20 @@
       tiles: [], modules: [], nextId: 1,
       res: { ...C.start },
       dose: 0, doseFrom: { background: 0, storm: 0, outside: 0 },
-      habTemp: C.habTemp.normal, sheltering: false, berm: { built: false, progress: 0, building: false },
+      habTemp: C.habTemp.normal, // the COLDEST habitat (each HAB has its own .temp)
+      sheltering: false, berm: null, // berm = the first HAB's moon-dirt shield (each HAB has its own .berm)
       foodOutH: 0, waterOutH: 0,
-      cargo: C.cargo.map((c) => ({ h: c.h, choice: null, asked: false, arrived: false })),
+      cargo: [], ships: [], wxUntil: C.chunkH, // filled ahead of time by extendWorld()
+      pendingCrew: 0, // new astronauts from a crew spaceship, waiting for the player to pick their jobs and HAB
+      rover: null, // { habId, trip: null | { from, to, crew, left, total } }
       since: {}, log: [], warned: {},
-      stats: { foodMade: 0, foodEaten: 0, o2Made: 0, waterMined: 0, unpoweredH: {}, darkH: 0, solarKwh: 0, accidents: [] },
+      stats: { foodMade: 0, foodEaten: 0, o2Made: 0, waterMined: 0, unpoweredH: {}, darkH: 0, solarKwh: 0, accidents: [], harm: {}, firstHarm: null },
       history: { o2: [], food: [], water: [], battery: [], dose: [], solar: [], use: [], hp: [], crew: [] },
       power: { supply: 0, use: 0, cap: 0 },
       stormRate: 0,
       rngA: (seed ^ 0x5bd1e995) | 0,
-      crewTotal: C.crew,
+      crewTotal: C.crew, // everyone who ever joined (the roster can shrink: sent home)
+      nextCrewId: C.crew + 1,
       sentHome: [], // astronauts medically retired to Earth (no longer in state.crew, the roster)
       jobSeq: 0, // order in which jobs (build, repair, shield) were asked for
       medbayUses: 0, // healing treatments used (max C.astro.medbay.uses per mission)
@@ -160,19 +214,8 @@
       researchCount: 0, // upgrades started so far (each one costs more parts)
       towerVisits: 0,   // Astronomy Tower visits this mission (the 1st shows today's picture, the rest the archive)
       lastAccident: null,
-      // AMS: each astronaut. Gym visits are staggered so they don't all need the gym at once.
-      crew: C.astro.names.slice(0, C.crew).map((name, i) => ({
-        id: i + 1, name, role: C.astro.roles[i] || 'engineer', hp: 100, dose: 0, injury: 0, stress: 0, bone: 100,
-        task: null, // a 1-day job inside a building, or a tower visit: { kind: 'lab'|'greenhouse'|'tower', id, left, total, target? }
-        paused: null, // research / greenhouse work put on hold by the shelter (resumes when the player sends them back)
-
-        accidents: 0, // injuries from lab micro-explosions or farming tools
-        where: 'hab', job: null, gymLeft: 0, gymId: null, sinceGym: i * 5,
-        medbay: false, medbayAt: null, medbayWhy: null, hits: 0, injuries: 0, warnedHp: 0,
-        wounds: [], // each injury separately: { hp, what, h } (the medbay heals the smallest one)
-        heal: null, // while resting in the medbay: { left, total, amount }
-        boneTier: 0, // 0 ok, 1 fragile (<50%), 2 severe (<25%): for one-time warnings
-      })),
+      // AMS: each astronaut (their home HAB is set once the first HAB exists, below).
+      crew: C.astro.names.slice(0, C.crew).map((name, i) => newAstronaut(i + 1, name, C.astro.roles[i] || 'engineer', null, i * 5)),
     };
     for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) state.tiles.push(C.zoneAt(c, r));
 
@@ -183,16 +226,16 @@
     state.radCurve = sw.radCurve; // real hour-by-hour LRO storm dose (history mission only)
     state.meteors = sw.meteors || [];
 
-    // Light forecast for every zone, every hour of the mission (shown as the sunlight strip).
+    // Light forecast for every zone, every hour (shown as the sunlight strip). extendWorld() keeps it ahead.
     state.light = {};
-    for (const z of Object.keys(C.zones)) {
-      state.light[z] = [];
-      for (let h = 0; h < C.missionHours; h++) state.light[z].push(zoneLitAt(state, z, h + 0.5));
-    }
+    for (const z of Object.keys(C.zones)) state.light[z] = [];
+    extendWorld(state);
 
     // Starting base (already built).
     const B = C.base;
-    addModule(state, 'hab', B.c, B.r, true);
+    const home = addModule(state, 'hab', B.c, B.r, true);
+    state.berm = home.berm;
+    for (const a of state.crew) a.homeId = home.id;
     addModule(state, 'solar', B.c - 2, B.r, true);
     addModule(state, 'solar', B.c - 2, B.r + 1, true);
     addModule(state, 'battery', B.c + 3, B.r, true);
@@ -210,6 +253,7 @@
       worker: null,  // (while being built) id of the Engineer the player picked
       usedAt: null,  // (Astronomy Tower) hour of the last visit
       dustLeft: 0 }; // (Solar Panel) hours left of moondust (half power)
+    if (type === 'hab') { m.temp = cfg().habTemp.normal; m.berm = { built: false, progress: 0, building: false, worker: null }; }
     state.modules.push(m);
     return m;
   }
@@ -217,7 +261,15 @@
   // ---------- queries ----------
   const zoneOf = (state, c, r) => state.tiles[r * cfg().map.cols + c];
   const built = (state, type) => state.modules.filter((m) => m.built && (!type || m.type === type));
-  const hab = (state) => state.modules.find((m) => m.type === 'hab');
+  const hab = (state) => state.modules.find((m) => m.type === 'hab'); // the first HAB (the base)
+  /** Every HAB, oldest first ("HAB 1", "HAB 2", ...). */
+  const habs = (state) => built(state, 'hab').sort((a, b) => a.id - b.id);
+  const habName = (state, m) => 'HAB ' + (habs(state).indexOf(m) + 1);
+  /** The HAB an astronaut lives in (the rover moves people between HABs). */
+  const homeOf = (state, a) => state.modules.find((m) => m.id === a.homeId && m.type === 'hab') || hab(state);
+  /** Job key for a HAB's moon-dirt shield ('berm' for the first HAB, so older code keeps working). */
+  const bermKey = (state, H) => (H === hab(state) ? 'berm' : 'berm' + H.id);
+  const habOfBermKey = (state, key) => (key === 'berm' ? hab(state) : state.modules.find((m) => m.type === 'hab' && 'berm' + m.id === key));
   const hasShelter = (state) => built(state, 'shelter').length > 0;
   const batteryCap = (state) => built(state, 'battery').length * cfg().modules.battery.store;
   // ----- crew & jobs -----
@@ -232,7 +284,10 @@
       if (!m.built) list.push({ key: 'b' + m.id, kind: 'module', m, seq: m.seq, done: m.progress, total: C.modules[m.type].work, assignee: m.worker });
       else if (m.repair) list.push({ key: 'r' + m.id, kind: 'repair', m, seq: m.repair.seq, done: m.repair.progress, total: m.repair.work, assignee: m.repair.worker });
     }
-    if (state.berm.building && !state.berm.built) list.push({ key: 'berm', kind: 'berm', seq: state.berm.seq || 0, done: state.berm.progress, total: C.bermWork, assignee: state.berm.worker });
+    for (const H of state.modules) {
+      const B = H.type === 'hab' && H.berm;
+      if (B && B.building && !B.built) list.push({ key: bermKey(state, H), kind: 'berm', m: H, seq: B.seq || 0, done: B.progress, total: C.bermWork, assignee: B.worker });
+    }
     list.forEach((j) => {
       j.worker = state.crew.find((a) => a.id === j.assignee && !a.medbay) || null; // null = nobody (or they left for the medbay)
       j.active = !!(j.worker && j.worker.job === j.key && j.worker.where === 'outside'); // being worked on this hour
@@ -246,12 +301,13 @@
   function roleWhy(a, role, what) {
     if (!a) return 'That astronaut is no longer at the base.';
     if (a.medbay) return `${a.name} is in the medbay for good.`;
-    if (role && a.role !== role) return `Only ${role === 'engineer' ? 'Engineers' : 'the ' + roleName(role)} can ${what}. ${a.name} is the ${roleName(a.role)}.`;
+    if (role && a.role !== role) return `Only ${roleName(role)}s can ${what}. ${a.name} is a ${roleName(a.role)}.`;
     return null;
   }
   const TASK_TEXT = { lab: 'researching in the Research Bay', greenhouse: 'working in the greenhouse', tower: 'at the Astronomy Tower' };
   function busyWhy(state, a) {
     if (a.heal) return `${a.name} is resting in the medbay.`;
+    if (a.trip) return `${a.name} is riding the rover.`;
     if (a.task) return `${a.name} is ${TASK_TEXT[a.task.kind]} for ${a.task.left} more hour${a.task.left === 1 ? '' : 's'}.`;
     if (state.sheltering && hasShelter(state)) return 'The crew is in the storm shelter. Send them back to work first.';
     return null;
@@ -269,11 +325,12 @@
   }
   /** Give a job (building site or planned repair) to another Engineer. */
   function assignWorker(state, id, workerId) {
-    if (id === 'berm') { // the moon-dirt shield on the habitat
-      if (!state.berm.building || state.berm.built) return { ok: false, why: 'There is no job here.' };
+    if (typeof id === 'string' && id.startsWith('berm')) { // the moon-dirt shield on a HAB
+      const H = habOfBermKey(state, id);
+      if (!H || !H.berm.building || H.berm.built) return { ok: false, why: 'There is no job here.' };
       const w = resolveEngineer(state, workerId);
       if (w.why || !w.a) return { ok: false, why: w.why || 'No Engineer is available.' };
-      state.berm.worker = w.a.id;
+      H.berm.worker = w.a.id;
       return { ok: true, worker: w.a };
     }
     const m = state.modules.find((x) => x.id === id);
@@ -383,7 +440,7 @@
    * (state.crew) for good; state.sentHome remembers them for the debrief. The game shows a pop-up.
    */
   function sendHome(state, a, say) {
-    Object.assign(a, { home: true, homeAt: state.hour, job: null, where: 'earth', gymLeft: 0, gymId: null, heal: null, task: null, paused: null });
+    Object.assign(a, { home: true, homeAt: state.hour, job: null, where: 'earth', gymLeft: 0, gymId: null, heal: null, task: null, paused: null, trip: false });
     state.crew = state.crew.filter((x) => x !== a);
     state.sentHome.push(a);
     const left = activeCrew(state).length;
@@ -392,6 +449,95 @@
       (left ? `${left} astronaut${left > 1 ? 's' : ''} left at the base.` : 'Nobody is left to run the base.'),
       { popup: 'home', who: a.name, id: a.id, dose: a.dose, injury: a.injury, left });
   }
+  /**
+   * Running out of air, heat, food or water no longer ends the game by itself: it hurts the astronauts
+   * every hour (an "injury" the medbay can heal) until they are sent home. Same-kind harm adds up in one wound.
+   */
+  function harm(state, a, cause, what, hp) {
+    const w = a.wounds.find((x) => x.what === what);
+    if (w) w.hp += hp; else a.wounds.push({ hp, what, h: state.hour });
+    a.injury = a.wounds.reduce((s, x) => s + x.hp, 0);
+    state.stats.harm[cause] = (state.stats.harm[cause] || 0) + hp;
+    if (!state.stats.firstHarm) state.stats.firstHarm = cause;
+  }
+
+  // ----- crew spaceship (every 30 days) and Landing Pads -----
+  const mid = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
+  const gap = (a, b) => Math.hypot(mid(a).c - mid(b).c, mid(a).r - mid(b).r);
+  /** Is a Landing Pad at (c, r) close enough to a HAB? (finishedOnly: count only HABs that are built) */
+  function padNearHab(state, c, r, finishedOnly) {
+    const d = cfg().modules.pad, spot = { c, r, w: d.w, h: d.h };
+    return state.modules.some((m) => m.type === 'hab' && (m.built || !finishedOnly) && gap(spot, m) <= cfg().pad.radius);
+  }
+  /** Where a crew spaceship can land now: finished Landing Pads within reach of a finished HAB. */
+  function landingSpots(state) {
+    return built(state, 'pad').map((p) => ({ pad: p, habs: habs(state).filter((H) => gap(p, H) <= cfg().pad.radius) })).filter((s) => s.habs.length);
+  }
+  /**
+   * The new astronauts from a spaceship join: the player picked their jobs and the HAB they live in
+   * (their "home"; only a rover trip can change it later).
+   */
+  /** The HAB closest to a Landing Pad: where astronauts who land on that pad live. */
+  function homeForPad(state, padId) {
+    const p = state.modules.find((m) => m.id === padId && m.type === 'pad');
+    const list = habs(state);
+    return p ? list.reduce((b, H) => (gap(p, H) < gap(p, b) ? H : b), list[0]) : hab(state);
+  }
+  /**
+   * The new astronauts from a spaceship join. The player picked their jobs and the Landing Pad the ship
+   * landed on; they live in the HAB closest to that pad (only a rover trip can move them later).
+   */
+  function joinCrew(state, roles, padId) {
+    const C = cfg(), n = Math.min(state.pendingCrew, roles.length), added = [];
+    const home = homeForPad(state, padId != null ? padId : state.landedPadId);
+    for (let i = 0; i < n; i++) {
+      const id = state.nextCrewId++;
+      const a = newAstronaut(id, `Astronaut ${id}`, C.astro.roleInfo[roles[i]] ? roles[i] : 'engineer', home.id, 0);
+      state.crew.push(a); added.push(a);
+    }
+    state.pendingCrew -= n; state.crewTotal += n;
+    if (n) log(state, 'good', `New crew: ${added.map((a) => `${a.name} (${roleName(a.role)})`).join(', ')}, living in ${habName(state, home)}.`);
+    return added;
+  }
+
+  // ----- rover: fast travel between HABs -----
+  /** Buy the rover (once). It starts parked at the first HAB. */
+  function buyRover(state) {
+    const C = cfg();
+    if (state.rover) return { ok: false, why: 'You already have a rover.' };
+    if (state.res.parts < C.rover.cost) return { ok: false, why: `The rover needs ${C.rover.cost} parts (you have ${state.res.parts}).` };
+    state.res.parts -= C.rover.cost;
+    state.rover = { habId: hab(state).id, trip: null };
+    log(state, 'good', `Rover built! It is parked at ${habName(state, hab(state))}.`);
+    return { ok: true };
+  }
+  /** Who can get in: astronauts living at the rover's HAB who aren't busy. */
+  function roverRiders(state) {
+    const rv = state.rover;
+    if (!rv) return [];
+    return activeCrew(state).filter((a) => homeOf(state, a).id === rv.habId && !a.heal && !a.task && !a.trip);
+  }
+  /** Drive up to 4 astronauts from the rover's HAB to another HAB. The rover stays there afterwards. */
+  function startTrip(state, toId, ids) {
+    const C = cfg(), rv = state.rover;
+    if (!rv) return { ok: false, why: 'Build a rover first.' };
+    if (rv.trip) return { ok: false, why: 'The rover is already driving.' };
+    if (state.sheltering && hasShelter(state)) return { ok: false, why: 'The crew is in the storm shelter.' };
+    const from = state.modules.find((m) => m.id === rv.habId), to = state.modules.find((m) => m.id === toId && m.type === 'hab' && m.built);
+    if (!to || to === from) return { ok: false, why: 'Pick another HAB to drive to.' };
+    const want = [...new Set(ids)];
+    if (want.length > C.rover.seats) return { ok: false, why: `The rover has ${C.rover.seats} seats.` };
+    const ok = roverRiders(state).map((a) => a.id);
+    const crew = want.filter((id) => ok.includes(id));
+    if (!crew.length) return { ok: false, why: 'Pick at least one astronaut who is at this HAB.' };
+    const dist = Math.hypot(to.c - from.c, to.r - from.r);
+    const hours = Math.max(1, Math.ceil(dist / C.rover.tilesPerH));
+    rv.trip = { from: from.id, to: to.id, crew, left: hours, total: hours };
+    for (const a of state.crew) if (crew.includes(a.id)) Object.assign(a, { trip: true, job: null, gymLeft: 0, gymId: null, where: 'rover' });
+    log(state, 'info', `Rover: ${crew.length} astronaut${crew.length > 1 ? 's' : ''} driving from ${habName(state, from)} to ${habName(state, to)} (${hours} h).`);
+    return { ok: true, hours };
+  }
+
   /** Everyone who started the mission: on the roster, plus the ones sent home. */
   const allCrew = (state) => state.crew.concat(state.sentHome || []).sort((x, y) => x.id - y.id);
 
@@ -474,12 +620,19 @@
 
   function canPlace(state, type, c, r) {
     const C = cfg(), d = C.modules[type];
-    if (!d || type === 'hab') return { ok: false, why: 'Not buildable' };
+    if (!d) return { ok: false, why: 'Not buildable' };
+    // (HABs are built like everything else: 15 parts, one Engineer.)
     if (c < 0 || r < 0 || c + d.w > C.map.cols || r + d.h > C.map.rows) return { ok: false, why: 'Outside the map' };
-    if (moduleAt(state, c, r)) return { ok: false, why: 'Something is already here' };
+    for (let dc = 0; dc < d.w; dc++) for (let dr = 0; dr < d.h; dr++) if (moduleAt(state, c + dc, r + dr)) return { ok: false, why: 'Something is already here' };
     if (state.res.parts < d.cost) return { ok: false, why: `Needs ${d.cost} parts (you have ${state.res.parts})` };
     const z = zoneOf(state, c, r);
     if (d.onlyZone && z !== d.onlyZone) return { ok: false, why: 'Ice Drill must go on the dark ice area' };
+    if (type === 'pad' && !padNearHab(state, c, r, false)) return { ok: false, why: `A Landing Pad must be within ${C.pad.radius} squares of a HAB (gold circles).` };
+    // Each pad has its own area: no other Landing Pad (built or planned) within the same radius.
+    if (type === 'pad') {
+      const spot = { c, r, w: d.w, h: d.h };
+      if (state.modules.some((m) => m.type === 'pad' && gap(spot, m) <= C.pad.radius)) return { ok: false, why: `Too close to another Landing Pad: pads must be more than ${C.pad.radius} squares apart (red circles).` };
+    }
     return { ok: true, zone: z };
   }
 
@@ -511,15 +664,17 @@
     return true;
   }
 
-  function startBerm(state, workerId) {
-    if (state.berm.built || state.berm.building) return { ok: false, why: 'The habitat shield is already being built.' };
+  /** Pile moon dirt on a HAB (default: the Engineer's own HAB). */
+  function startBerm(state, workerId, habId) {
     const w = resolveEngineer(state, workerId);
     if (w.why) return { ok: false, why: w.why };
-    state.berm.building = true;
-    state.berm.seq = ++state.jobSeq;
-    state.berm.worker = w.a ? w.a.id : null;
-    log(state, 'info', `${w.a ? w.a.name : 'The crew'} starts piling moon dirt on the habitat.`);
-    return { ok: true, worker: w.a };
+    const H = (habId && state.modules.find((m) => m.id === habId && m.type === 'hab')) || (w.a ? homeOf(state, w.a) : hab(state));
+    if (H.berm.built || H.berm.building) return { ok: false, why: `${habName(state, H)}'s shield is already ${H.berm.built ? 'finished' : 'being built'}.` };
+    H.berm.building = true;
+    H.berm.seq = ++state.jobSeq;
+    H.berm.worker = w.a ? w.a.id : null;
+    log(state, 'info', `${w.a ? w.a.name : 'The crew'} starts piling moon dirt on ${habName(state, H)}.`);
+    return { ok: true, worker: w.a, hab: H };
   }
 
   function setShelter(state, on) {
@@ -554,12 +709,12 @@
 
   /** Extra radiation from solar storms at hour h, in mSv/h for an unshielded person on the surface. */
   function stormRateAt(state, h) {
-    if (state.radCurve) return crewRate(state.radCurve[Math.floor(h)] || 0);
     const rise = cfg().rad.storm.rise;
-    let s = 0;
+    // May 2024: the real hour-by-hour LRO measurement for its first 30 days (those storms have .curve).
+    let s = state.radCurve && h < state.radCurve.length ? crewRate(state.radCurve[Math.floor(h)] || 0) : 0;
     for (const st of state.storms) {
       const t = h - st.h;
-      if (t < 0) continue;
+      if (t < 0 || st.curve) continue;
       if (st.profile) { s += crewRate(st.profile[Math.floor(t)] || 0); continue; }
       if (t > 120) continue;
       s += t < rise ? (st.peak * t) / rise : st.peak * Math.exp(-(t - rise) / st.tau);
@@ -614,7 +769,8 @@
   // Engineers work on the oldest job the player gave them → habitat.
   function assignCrew(state, say) {
     for (const a of activeCrew(state)) if (a.heal) { a.where = 'medbay'; a.job = null; } // resting: not available for anything else
-    const C = cfg(), B = C.astro.bone, act = activeCrew(state).filter((a) => !a.heal);
+    for (const a of activeCrew(state)) if (a.trip) { a.where = 'rover'; a.job = null; } // riding the rover
+    const C = cfg(), B = C.astro.bone, act = activeCrew(state).filter((a) => !a.heal && !a.trip);
     const jobs = jobList(state);
     for (const a of act) a.job = null;
     if (state.sheltering && hasShelter(state)) { for (const a of act) a.where = 'shelter'; return; } // jobs wait
@@ -659,16 +815,18 @@
 
   // ---------- crew: one hour of radiation, stress, bones and accidents for each astronaut ----------
   function updateCrew(state, S, shower, say) {
-    const C = cfg(), A = C.astro, bg = C.rad.surfacePerH;
-    const inside = state.berm.built ? C.rad.habBerm : C.rad.hab;
+    const C = cfg(), A = C.astro, bg = C.rad.surfacePerH, Hm = C.endless.harm;
     const shelterOk = hasShelter(state);
     const stormOn = S > C.rad.stormOn;
     const per = 1 / state.crewTotal; // doseFrom = crew average, for the debrief
     for (const a of activeCrew(state)) {
       // Radiation. Outside = everything; inside any building (habitat, Research Bay, greenhouse, tower, gym,
-      // medbay) = like the habitat; shelter = 95% blocked.
+      // medbay, rover) = like their HAB (less with its moon-dirt shield); shelter = 95% blocked.
+      const home = homeOf(state, a);
+      const inside = home.berm.built ? C.rad.habBerm : C.rad.hab;
       const exposed = isExposed(a);
-      const f = exposed ? 1 : a.where === 'shelter' ? (shelterOk ? C.rad.shelter : inside) : inside;
+      const inRover = a.where === 'rover'; // fully shielded: no radiation, no storm or meteor worries
+      const f = inRover ? C.rad.rover : exposed ? 1 : a.where === 'shelter' ? (shelterOk ? C.rad.shelter : inside) : inside;
       const dBg = f * bg, dStorm = f * S;
       a.dose += dBg + dStorm;
       if (exposed) state.doseFrom.outside += (dBg + dStorm) * per;
@@ -679,8 +837,8 @@
       let ds = 0;
       if (a.where === 'outside') ds += St.outsidePerH;
       if (a.where === 'gym') ds -= St.gymReliefPerH; // exercise helps the mind too
-      if (stormOn) ds += exposed ? St.stormOutsidePerH : a.where === 'shelter' ? St.stormShelterPerH : St.stormInsidePerH;
-      if (shower) ds += a.where === 'outside' ? St.meteorOutsidePerH : St.meteorInsidePerH;
+      if (stormOn && !inRover) ds += exposed ? St.stormOutsidePerH : a.where === 'shelter' ? St.stormShelterPerH : St.stormInsidePerH;
+      if (shower && !inRover) ds += a.where === 'outside' ? St.meteorOutsidePerH : St.meteorInsidePerH;
       const wasSlow = isSlow(a);
       a.stress = clamp(a.stress + ds, 0, 100);
       if (!wasSlow && isSlow(a)) say('warn', `😰 ${a.name} is very stressed`, `Stress ${Math.round(a.stress)}: they now work at half speed. Pick them and click an Astronomy Tower or a Fitness Center to lower their stress.`);
@@ -742,6 +900,12 @@
         if (a.task.left <= 0) { const t = a.task; a.task = null; finishTask(state, a, t, say); }
       }
 
+      // No air, too cold, no food or no water: health drops every hour (see harm()).
+      if (state.res.o2 <= 0.01) harm(state, a, 'o2', 'no oxygen', Hm.noO2PerH);
+      if ((a.where === 'hab' || a.where === 'medbay') && home.temp < C.habTemp.fail) harm(state, a, 'cold', 'cold', Hm.coldPerH);
+      if (state.foodOutH >= C.fail.foodGraceH) harm(state, a, 'food', 'hunger', Hm.hungerPerH);
+      if (state.waterOutH >= C.fail.waterGraceH) harm(state, a, 'water', 'thirst', Hm.thirstPerH);
+
       // Health: radiation over the whole session (can never heal: maxHp) minus injuries (the medbay can heal those).
       a.hp = clamp(maxHp(a) - a.injury, 0, 100);
       if (a.hp < 50 && a.warnedHp < 1) { a.warnedHp = 1; say('warn', `❤️ ${a.name} is down to ${Math.round(a.hp)} HP`, 'Radiation damage never heals. Injuries can be healed in the medbay (button in the AMS).'); }
@@ -792,7 +956,7 @@
   function track(state, key, cond, startText, endText, events, level) {
     if (cond && state.since[key] == null) {
       state.since[key] = state.hour;
-      if (startText) { log(state, level || 'warn', startText); events && events.push({ level: level || 'warn', text: startText }); }
+      if (startText) { log(state, level || 'warn', startText); events && events.push({ level: level || 'warn', title: startText }); }
       state.firstSeen = state.firstSeen || {};
       if (state.firstSeen[key] == null) state.firstSeen[key] = state.hour;
     } else if (!cond && state.since[key] != null) {
@@ -809,7 +973,8 @@
     const C = cfg(), h = state.hour, ev = [];
     const say = (level, title, text, extra) => { log(state, level, title + (text ? ' — ' + text : '')); ev.push({ level, title, text, ...extra }); };
 
-    if (h === 0) say('info', 'CAPCOM: Welcome to Shackleton Base', 'Keep 4 astronauts alive for 30 days. Watch the sunlight forecast under the map: the Sun circles the horizon here, so shadows move.');
+    extendWorld(state);
+    if (h === 0) say('info', 'CAPCOM: Welcome to Zain Base', `Keep the base running as long as you can. A crew spaceship brings a new HAB and ${C.endless.newCrew} astronauts every ${C.endless.shipEveryH / 24} days. Watch the sunlight forecast: the Sun circles the horizon here, so shadows move.`);
 
     // Darkness forecast for zones where we have solar panels.
     for (const z of ['plain', 'ridge']) {
@@ -895,8 +1060,9 @@
         j.m.repair.progress += work;
         if (j.m.repair.progress >= j.total) { j.m.damaged = false; j.m.repair = null; a.job = null; say('good', `Repaired: ${C.modules[j.m.type].name}`, `${a.name} fixed it. It works at full speed again.`); }
       } else {
-        state.berm.progress += work;
-        if (state.berm.progress >= C.bermWork) { state.berm.built = true; state.berm.building = false; a.job = null; say('good', 'Habitat shielding finished', `${a.name} finished piling moon dirt on the roof. It now blocks most radiation.`); }
+        const B = j.m.berm;
+        B.progress += work;
+        if (B.progress >= C.bermWork) { B.built = true; B.building = false; a.job = null; say('good', `${habName(state, j.m)} shielding finished`, `${a.name} finished piling moon dirt on the roof. It now blocks most radiation.`); }
       }
     }
 
@@ -965,14 +1131,58 @@
     lowCheck('lowO2', state.res.o2, U.o2PerPersonH * n, 'Oxygen: less than 2 days left', 'Make sure the O₂ Generator has power AND water.');
     lowCheck('lowFood', state.res.food, U.foodPerPersonH * n, 'Food: less than 2 days left', 'Greenhouses need power. A cargo of food can help too.');
 
-    // Habitat temperature.
-    const H = hab(state), T = C.habTemp;
-    const habDark = !zoneLitAt(state, zoneOf(state, H.c, H.r), h + 0.5);
-    if (H.powered) state.habTemp = Math.min(T.normal, state.habTemp + T.heat);
-    else state.habTemp -= habDark ? T.coolDark : T.coolLit;
+    // Habitat temperature: each HAB warms up with power and cools down without it (faster in the dark).
+    const T = C.habTemp;
+    for (const H of habs(state)) {
+      const habDark = !zoneLitAt(state, zoneOf(state, H.c, H.r), h + 0.5);
+      if (H.powered) H.temp = Math.min(T.normal, H.temp + T.heat);
+      else H.temp = Math.max(-60, H.temp - (habDark ? T.coolDark : T.coolLit));
+    }
+    state.habTemp = Math.min(...habs(state).map((H) => H.temp));
 
-    // Each astronaut: radiation → Health, Stress, Bone density, injuries, meteor hits, medbay.
+    // Each astronaut: radiation → Health, Stress, Bone density, injuries, meteor hits, harm, medbay.
     updateCrew(state, S, shower, say);
+    track(state, 'o2Empty', state.res.o2 <= 0.01, '😮‍💨 OXYGEN IS GONE! The crew is breathing from emergency suit tanks and losing health fast.', 'Oxygen is back.', ev, 'bad');
+    track(state, 'habCold', state.habTemp < T.fail, `🥶 A habitat is below ${T.fail} °C: the astronauts inside are losing health. Give it power!`, 'The habitats are warm again.', ev, 'bad');
+    track(state, 'starving', state.foodOutH >= C.fail.foodGraceH, '🍞 No food for 3 days: the crew is losing health.', null, ev, 'bad');
+    track(state, 'thirsty', state.waterOutH >= C.fail.waterGraceH, '💧 No water for 2 days: the crew is losing health.', null, ev, 'bad');
+
+    // Rover trip: one hour closer. On arrival the riders live at the new HAB, and the rover stays there.
+    const rv = state.rover;
+    if (rv && rv.trip && --rv.trip.left <= 0) {
+      const to = state.modules.find((m) => m.id === rv.trip.to);
+      const riders = state.crew.filter((a) => a.trip);
+      for (const a of riders) { a.trip = false; a.homeId = to.id; a.where = 'hab'; }
+      rv.habId = to.id; rv.trip = null;
+      say('good', `🚙 The rover arrived at ${habName(state, to)}`, riders.length ? `${riders.map((a) => a.name).join(', ')} now live${riders.length > 1 ? '' : 's'} there.` : '');
+    }
+
+    // Crew spaceship (every 30 days): warning 5 days before. It can only land on a finished Landing Pad next to
+    // a finished HAB; if there is none when it arrives, it turns back and the next one comes 30 days later.
+    const E = C.endless;
+    for (const sh of state.ships) {
+      if (!sh.warned && h + 1 >= sh.h - E.shipWarnH) {
+        sh.warned = true;
+        const ready = landingSpots(state).length > 0;
+        say(ready ? 'info' : 'warn', '🚀 A crew spaceship is on the way!',
+          `It lands in ${E.shipWarnH / 24} days with ${E.newCrew} new astronauts (you choose their jobs and their HAB) and restocks the medbay.` +
+          (ready ? '' : ` ⚠️ It needs a Landing Pad within ${C.pad.radius} squares of a finished HAB, or it can't land. Build one now!`), { banner: true });
+      }
+      if (!sh.arrived && h + 1 >= sh.h) {
+        sh.arrived = true;
+        const spots = landingSpots(state);
+        if (!spots.length) {
+          sh.missed = true;
+          say('bad', '🚀 The crew spaceship could not land!', `There was no Landing Pad within ${C.pad.radius} squares of a finished HAB, so it flew back to Earth. The next one comes in ${E.shipEveryH / 24} days.`, { banner: true });
+        } else {
+          const spot = spots[0]; // the player can pick another pad (ev.pads) before it touches down
+          sh.padId = spot.pad.id; state.landedPadId = spot.pad.id;
+          state.pendingCrew += E.newCrew;
+          state.medbayUses = 0; // medical supplies restocked
+          say('good', '🚀 The crew spaceship has landed!', `${E.newCrew} new astronauts are here, and the medbay is fully restocked.`, { ship: true, padId: spot.pad.id, pads: spots.map((x) => x.pad.id) });
+        }
+      }
+    }
     const out = activeCrew(state).filter(isExposed);
     if (S > C.rad.stormOn && out.length && !state.warned['eva' + Math.floor(h / 6)]) {
       state.warned['eva' + Math.floor(h / 6)] = true;
@@ -1004,14 +1214,14 @@
 
     state.hour++;
 
-    // Fail / win checks.
-    const fail = (cause) => { state.status = 'lost'; state.failure = { cause, h: state.hour }; log(state, 'bad', 'MISSION FAILED: ' + cause); ev.push({ level: 'bad', title: 'Mission failed', end: true }); };
-    if (state.res.o2 <= 0) fail('o2');
-    else if (state.habTemp < T.fail) fail('cold');
-    else if (!activeCrew(state).length) fail('crew');
-    else if (state.foodOutH >= C.fail.foodGraceH) fail('food');
-    else if (state.waterOutH >= C.fail.waterGraceH) fail('water');
-    else if (state.hour >= C.missionHours) { state.status = 'won'; log(state, 'good', 'MISSION COMPLETE'); ev.push({ level: 'good', title: 'Mission complete', end: true }); }
+    // The game is endless. It only ends when no astronaut is left on the Moon to run the base.
+    // reason = what started hurting the crew first (cold, o2, food, water), or 'crew' (radiation / bones).
+    if (!activeCrew(state).length) {
+      state.status = 'lost';
+      state.failure = { cause: 'crew', reason: state.stats.firstHarm || 'crew', h: state.hour };
+      log(state, 'bad', `THE BASE HAS CLOSED after ${round1(state.hour / 24)} days.`);
+      ev.push({ level: 'bad', title: 'The base has closed', end: true });
+    }
     return ev;
   }
 
@@ -1023,7 +1233,7 @@
     const P = state.power;
     const off = (t) => built(state, t).filter((m) => m.on && !m.powered);
     const consequences = [];
-    if (off('hab').length) consequences.push({ icon: '🥶', text: `Habitat heaters OFF: ${round1(state.habTemp)} °C and dropping`, level: 'bad' });
+    if (off('hab').length) consequences.push({ icon: '🥶', text: `Habitat heaters OFF: ${round1(state.habTemp)} °C and dropping${state.habTemp < cfg().habTemp.fail ? ': astronauts losing health!' : ''}`, level: 'bad' });
     if (off('o2gen').length) consequences.push({ icon: '💨', text: 'O₂ Generator OFF: no new oxygen', level: 'bad' });
     if (off('drill').length) consequences.push({ icon: '⛏️', text: 'Ice Drill OFF: no new water', level: 'warn' });
     if (off('greenhouse').length) consequences.push({ icon: '🌱', text: `${off('greenhouse').length} Greenhouse OFF → no new food`, level: 'warn' });
@@ -1102,7 +1312,7 @@
   function debrief(state) {
     const C = cfg(), s = state.since, first = state.firstSeen || {}, ended = state.lastEnded || {};
     const startOf = (k) => (s[k] != null ? s[k] : ended[k] ? ended[k].from : first[k]);
-    const won = state.status === 'won';
+    const won = false; // endless: the only ending is "no astronauts left"
     const out = { won, chain: [], tips: [], fact: '', stats: {} };
     const t = state.failure && state.failure.h;
     const add = (h, text) => out.chain.push({ when: h != null ? fmtDay(h) : '', text });
@@ -1114,13 +1324,29 @@
     const ridgePanels = built(state, 'solar').filter((m) => zoneOf(state, m.c, m.r) === 'ridge').length;
     const accidentLoss = (type) => Math.round(state.stats.accidents.filter((x) => x.type === type).reduce((s, x) => s + x.lost, 0));
 
+    // Who left, when and why (shown for every ending).
+    const crewStory = () => {
+      const outAt = (a) => (a.home ? a.homeAt : a.medbayAt) || 0;
+      for (const a of allCrew(state).filter((x) => x.home || x.medbay).sort((x, y) => outAt(x) - outAt(y))) {
+        const why = [`${Math.round(a.dose)} mSv of radiation`];
+        if (a.hits) why.push(`${a.hits} meteoroid hit${a.hits > 1 ? 's' : ''}`);
+        if (a.injuries) why.push(`${a.injuries} injur${a.injuries > 1 ? 'ies' : 'y'} from weak bones`);
+        if (a.accidents) why.push(`${a.accidents} work accident${a.accidents > 1 ? 's' : ''}`);
+        for (const w of a.wounds) if (['no oxygen', 'cold', 'hunger', 'thirst'].includes(w.what)) why.push(`${Math.round(w.hp)} HP from ${w.what}`);
+        if (a.medbayWhy === 'bones') why.push('bone density reached 0%');
+        add(outAt(a), a.home ? `${a.name}'s health ran out: medically retired and sent home to Earth (${why.join(', ')}).` : `${a.name} went to the medbay (${why.join(', ')}).`);
+      }
+      add(t, `With no astronauts left on the Moon, the base had to close after ${round1(t / 24)} days.`);
+    };
+
     if (!won) {
-      const cause = state.failure.cause;
+      const cause = state.failure.reason || state.failure.cause;
       if (cause === 'cold') {
         out.title = 'The habitat got too cold';
         powerStory();
         add(startOf('nopower_hab'), 'With no power left, the heaters stopped.');
-        add(t, `The habitat cooled below ${C.habTemp.fail} °C. The crew had to leave.`);
+        add(startOf('habCold'), `The habitat cooled below ${C.habTemp.fail} °C, and the cold made the crew sick.`);
+        crewStory();
         if (!ridgePanels) out.tips.push('Build solar panels on HIGH GROUND (the light gray hills and ridges). It stays sunny much longer. Drag the map to find them.');
         out.tips.push('Check the sunlight forecast under the map. Before a long shadow, fill the batteries and build more of them.');
         out.tips.push('Turn off greenhouses during the dark. The crew can eat stored food for a few days.');
@@ -1131,7 +1357,8 @@
         else powerStory();
         add(startOf('noO2Make'), 'The O₂ Generator stopped making oxygen.');
         add(null, accidentLoss('o2gen') ? `O₂ Generator leaks lost ${accidentLoss('o2gen')} kg of oxygen.` : '');
-        add(t, 'The oxygen tank reached zero.');
+        add(startOf('o2Empty'), 'The oxygen tank reached zero. The crew breathed from emergency tanks and got sick.');
+        crewStory();
         out.tips.push('The O₂ Generator needs BOTH power and water. Watch both bars.');
         if (!built(state, 'drill').length) out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one). Ice → water → oxygen.');
         out.tips.push('Choose "Water & air" cargo if oxygen is getting low.');
@@ -1140,19 +1367,10 @@
         out.title = state.sentHome.length === state.crewTotal ? 'Every astronaut was sent home to Earth' : 'No astronauts are left to run the base';
         const f = state.doseFrom;
         add(null, `Average radiation per astronaut: ${Math.round(f.storm)} mSv from solar storms inside, ${Math.round(f.outside)} mSv while working outside, ${Math.round(f.background)} mSv everyday background.`);
-        const outAt = (a) => (a.home ? a.homeAt : a.medbayAt) || 0;
-        for (const a of allCrew(state).sort((x, y) => outAt(x) - outAt(y))) {
-          const why = [`${Math.round(a.dose)} mSv of radiation`];
-          if (a.hits) why.push(`${a.hits} meteoroid hit${a.hits > 1 ? 's' : ''}`);
-          if (a.injuries) why.push(`${a.injuries} injur${a.injuries > 1 ? 'ies' : 'y'} from weak bones`);
-          if (a.accidents) why.push(`${a.accidents} work accident${a.accidents > 1 ? 's' : ''}`);
-          if (a.medbayWhy === 'bones') why.push('bone density reached 0%');
-          add(outAt(a), a.home ? `${a.name}'s health ran out: medically retired and sent home to Earth (${why.join(', ')}).` : `${a.name} went to the medbay (${why.join(', ')}).`);
-        }
-        add(t, 'With no astronauts left at the base, the mission had to end.');
+        crewStory();
         if (!hasShelter(state)) out.tips.push('Build a Storm Shelter early. It blocks 95% of storm radiation.');
         out.tips.push('When a storm or meteor shower warning comes, stop building outside and keep the crew inside.');
-        if (!state.berm.built) out.tips.push('Pile moon dirt on the habitat ("Shield habitat" button). It blocks radiation every day.');
+        if (habs(state).some((H) => !H.berm.built)) out.tips.push('Pile moon dirt on each habitat ("Shield habitat" button). It blocks radiation every day.');
         if (allCrew(state).some((a) => a.injuries) && !built(state, 'gym').length) out.tips.push('Build a Fitness Center so bones stay strong and astronauts don\'t get hurt.');
         const big = state.storms.find((s) => s.strong && s.profile);
         out.fact = big
@@ -1164,7 +1382,8 @@
         add(null, `Greenhouses grew ${Math.round(state.stats.foodMade)} kg of food; the crew ate ${Math.round(state.stats.foodEaten)} kg.`);
         add(null, accidentLoss('greenhouse') ? `Greenhouse accidents threw away ${accidentLoss('greenhouse')} kg of food.` : '');
         add(startOf('foodEmpty'), 'Food storage reached zero.');
-        add(t, 'After 3 days without food, the mission had to end.');
+        add(startOf('starving'), 'After 3 days without food, the crew started losing health.');
+        crewStory();
         out.tips.push('Each greenhouse grows ~2.9 kg of food per day. 4 astronauts eat ~7.2 kg per day.');
         out.tips.push('Greenhouses need lots of power. More solar panels and batteries keep them running.');
         out.tips.push('Pick "Food pack" in a cargo lander when food is low.');
@@ -1177,7 +1396,8 @@
         add(null, `The O₂ Generator used ${Math.round(state.stats.o2Made * C.modules.o2gen.waterPerH / C.modules.o2gen.o2PerH)} kg of water to make air. The crew and greenhouses used more.`);
         add(null, accidentLoss('drill') ? `Ice Drill accidents leaked ${accidentLoss('drill')} kg of water.` : '');
         add(startOf('waterEmpty'), 'The water tank ran dry.');
-        add(t, 'After 2 days without water, the mission had to end.');
+        add(startOf('thirsty'), 'After 2 days without water, the crew started losing health.');
+        crewStory();
         out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one) and give it power.');
         out.fact = 'NASA\'s LCROSS mission crashed into a dark crater near the lunar south pole in 2009 and found water ice in the debris cloud.';
       }
@@ -1191,6 +1411,7 @@
       out.tips.push(lost.length === 0 ? '⭐ All 4 astronauts stayed healthy.' : `${lost.map((a) => a.name + (a.home ? ' (sent home)' : ' (medbay)')).join(', ')} didn't finish the mission. Use the shelter and stay inside during storms and meteor showers.`);
       out.tips.push(state.stats.foodMade >= state.stats.foodEaten * 0.5 ? '⭐ Greenhouses grew at least half of the food.' : 'Try to grow at least half of your food in greenhouses.');
     }
+    out.subtitle = `Your base lasted ${Math.floor(state.hour / 24)} days with ${state.crewTotal} astronauts in total.`;
     out.stats = {
       days: round1(state.hour / 24), dose: Math.round(state.dose), foodMade: Math.round(state.stats.foodMade), foodEaten: Math.round(state.stats.foodEaten),
       o2Made: Math.round(state.stats.o2Made), waterMined: Math.round(state.stats.waterMined), solarKwh: Math.round(state.stats.solarKwh),
@@ -1229,8 +1450,21 @@
       const k = state.cargo[i];
       const prev = i > 0 ? state.cargo[i - 1].h : 0;
       const what = k.choice ? C.cargoOptions[k.choice].name : k.asked ? 'contents not chosen yet!' : 'you choose 2 days before';
-      out.push({ kind: 'cargo', icon: '🚀', level: k.asked && !k.choice ? 'warn' : 'info', left: k.h - now, total: k.h - prev,
+      out.push({ kind: 'cargo', icon: '📦', level: k.asked && !k.choice ? 'warn' : 'info', left: k.h - now, total: k.h - prev,
         label: `Cargo #${i + 1} (${what}) lands in` });
+    }
+    // Crew spaceship: only after its 5-day warning.
+    const ship = state.ships.find((s) => s.warned && !s.arrived);
+    if (ship) {
+      const ready = landingSpots(state).length > 0;
+      out.push({ kind: 'ship', icon: '🚀', level: ready ? 'info' : 'warn', left: ship.h - now, total: C.endless.shipWarnH,
+        label: ready ? `Crew spaceship (${C.endless.newCrew} astronauts) lands in` : 'Crew spaceship needs a Landing Pad next to a HAB! Arrives in' });
+    }
+    // Rover on the way.
+    const rv = state.rover;
+    if (rv && rv.trip) {
+      const to = state.modules.find((m) => m.id === rv.trip.to);
+      out.push({ kind: 'rover', icon: '🚙', level: 'info', left: Math.max(0, rv.trip.left - (now - state.hour)), total: rv.trip.total, label: `Rover arrives at ${to ? habName(state, to) : 'the HAB'} in` });
     }
     return out.sort((a, b) => a.left - b.left);
   }
@@ -1240,8 +1474,10 @@
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo, orderRepair, startHeal, healAmount, maxHp,
     useTower, towerReadyIn, startResearch, resumeTask, researchCost, plannedLevel, tendGreenhouse, sendToGym, assignWorker, boostOf, inLabRange, solarKw,
     causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, jobList, activeCrew, allCrew, crewById, crewSummary, isSlow, isGrounded, isExposed,
-
     hasShelter, batteryCap, needOf, built, fmtDay, day,
+    habs, habName, homeOf, bermKey, joinCrew, landingSpots, padNearHab, homeForPad, buyRover, roverRiders, startTrip, extendWorld,
+
+
 
   };
 })(typeof window !== 'undefined' ? window : globalThis);

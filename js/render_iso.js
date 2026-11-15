@@ -38,6 +38,7 @@
     const ctx = canvas.getContext('2d');
 
     let ground = null, zoneGrid = null, masks = null; // masks: where each zone shows on screen, for the terrain shadow
+    let craters = [];
     let crew = {}; // astronaut id -> where they stand (grid squares) and where they were drawn (for clicks)
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
@@ -225,7 +226,7 @@
       yield;
       const base = document.createElement('canvas'); // the ground before craters (see drawCrater in render.js)
       base.width = W; base.height = H; base.getContext('2d').drawImage(tex, 0, 0);
-      const craters = [];
+      craters = [];
       for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
       for (let i = 0; i < craters.length; i++) { // same crater as render.js, squashed flat
@@ -645,19 +646,38 @@
     // ---------- the rover (TEMPORARY model: a small box on 4 wheels, to be replaced with better art later) ----------
     // Position in grid squares: parked next to its HAB, or on the way between two HABs.
     function roverAt(state) {
-      const rv = state.rover;
-      if (!rv) return null;
-      const parked = (id) => { const H = state.modules.find((m) => m.id === id); return { c: H.c + H.w + 0.3, r: H.r + H.h + 0.2 }; };
-      if (!rv.trip) return { ...parked(rv.habId), dir: { c: 1, r: 0 }, moving: false };
-      const a = parked(rv.trip.from), b = parked(rv.trip.to);
-      const t = Math.max(0, Math.min(1, (rv.trip.total - rv.trip.left + frac) / rv.trip.total)), e = t * t * (3 - 2 * t);
-      const L = Math.hypot(b.c - a.c, b.r - a.r) || 1;
-      return { c: a.c + (b.c - a.c) * e, r: a.r + (b.r - a.r) * e, dir: { c: (b.c - a.c) / L, r: (b.r - a.r) / L }, moving: true, riders: rv.trip.crew.length };
+      return MT.Sim.roverPosition(state, frac);
     }
+
+    function craterDepthAt(x, y) {
+      let depth = 0;
+      // Follow the paint order, blending overlapping rims so the rover descends smoothly.
+      for (const crater of craters) {
+        const dx = (x - crater.x) / crater.r, dy = (y - crater.y) / (crater.r * 0.5);
+        const distanceSquared = dx * dx + dy * dy;
+        if (distanceSquared > 1.15 * 1.15) continue;
+        const bowl = Math.max(0, 1 - distanceSquared);
+        const floor = Math.min(7, crater.r * 0.22) * bowl * bowl;
+        const rim = Math.min(1, (1.15 - Math.sqrt(distanceSquared)) / 0.15);
+        const blend = rim * rim * (3 - 2 * rim);
+        depth += (floor - depth) * blend;
+      }
+      return depth;
+    }
+
     function drawRover(p) {
-      const g = up(P(p.c, p.r), liftAt(p.c, p.r)), fw = gridDir(p.dir.c * 0.28, p.dir.r * 0.28), sd = gridDir(-p.dir.r * 0.17, p.dir.c * 0.17);
+      const g = P(p.c, p.r), fw = gridDir(p.dir.c * 0.28, p.dir.r * 0.28), sd = gridDir(-p.dir.r * 0.17, p.dir.c * 0.17);
+      const depth = craterDepthAt(g.x, g.y);
+      const pitch = (craterDepthAt(g.x + fw.x, g.y + fw.y) - craterDepthAt(g.x - fw.x, g.y - fw.y)) * 0.5;
+      const roll = (craterDepthAt(g.x + sd.x, g.y + sd.y) - craterDepthAt(g.x - sd.x, g.y - sd.y)) * 0.5;
+      g.y += depth - liftAt(p.c, p.r);
       if (p.moving && Math.random() < 0.5) spawn(1, g.x - fw.x * 1.4, g.y - fw.y * 1.4, (Math.random() - 0.5) * 20, -Math.random() * 10, 0.6, 'rgba(200,200,205,0.7)');
-      const f = [{ x: g.x + fw.x + sd.x, y: g.y + fw.y + sd.y }, { x: g.x + fw.x - sd.x, y: g.y + fw.y - sd.y }, { x: g.x - fw.x - sd.x, y: g.y - fw.y - sd.y }, { x: g.x - fw.x + sd.x, y: g.y - fw.y + sd.y }];
+      const f = [
+        { x: g.x + fw.x + sd.x, y: g.y + fw.y + sd.y + pitch + roll },
+        { x: g.x + fw.x - sd.x, y: g.y + fw.y - sd.y + pitch - roll },
+        { x: g.x - fw.x - sd.x, y: g.y - fw.y - sd.y - pitch - roll },
+        { x: g.x - fw.x + sd.x, y: g.y - fw.y + sd.y - pitch + roll },
+      ];
       ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(g.x, g.y + 2, 12, 5, 0, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#2b2f36'; for (const q of f) { ctx.beginPath(); ctx.arc(q.x, q.y, 2.6, 0, Math.PI * 2); ctx.fill(); } // wheels
       ctx.beginPath(); ctx.moveTo(f[0].x, f[0].y - 3); for (let k = 1; k < 4; k++) ctx.lineTo(f[k].x, f[k].y - 3); ctx.closePath();

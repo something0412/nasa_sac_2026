@@ -8,7 +8,11 @@
   let hover = null;
   let scenario = 'training';
 
-  const renderer = MT.Renderer(document.getElementById('map'), document.getElementById('forecast'));
+  // Top-down or isometric (2.5D) map: js/view.js picks which renderer draws. V or the 🧊 button switches.
+  const renderer = MT.ViewSwitch(document.getElementById('map'), document.getElementById('forecast'));
+  const viewBtn = document.getElementById('viewBtn');
+  viewBtn.addEventListener('click', () => renderer.toggleView());
+  renderer.onViewChange((v) => { viewBtn.textContent = v === 'iso' ? '🗺️ Top view' : '🧊 2.5D view'; });
   const ui = MT.UI({
     speed: setSpeed,
     berm: () => { if (state && MT.Sim.startBerm(state)) refresh(); },
@@ -146,6 +150,13 @@
   canvas.addEventListener('pointercancel', () => { press = null; canvas.classList.remove('dragging'); });
   canvas.addEventListener('pointerleave', () => { if (!press) { hover = null; ui.tooltip(state, null, false); } });
   canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); ui.select(null); });
+  // Scroll wheel = zoom in/out around the mouse (both views). Each wheel notch is about 15%.
+  canvas.addEventListener('wheel', (e) => {
+    if (!renderer.canZoom()) return;
+    e.preventDefault();
+    renderer.zoomAt(e, Math.exp(-Math.max(-300, Math.min(300, e.deltaY)) * 0.0015));
+    hover = renderer.tileAt(e);
+  }, { passive: false });
 
   function onMapClick(e) {
     if (!state) return;
@@ -176,6 +187,8 @@
     if (e.code === 'Space') { e.preventDefault(); setSpeed(speed ? 0 : lastSpeed); }
     else if (e.key === 'Escape') ui.select(null);
     else if (e.key === 'h' || e.key === 'H') renderer.centerOnBase(state, true);
+    else if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) { renderer.toggleView(); hover = null; }
+    else if ((e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_') && !e.ctrlKey && !e.metaKey) renderer.zoomAt(null, e.key === '-' || e.key === '_' ? 1 / 1.25 : 1.25);
     else if (/^[1-9]$/.test(e.key) && +e.key <= MT.CONFIG.buildOrder.length) { const t = MT.CONFIG.buildOrder[+e.key - 1]; ui.select(ui.selected === t ? null : t); }
     else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       const panel = { s: 'supplies', b: 'build', a: 'ams', w: 'why', c: 'capcom', l: 'log' }[e.key.toLowerCase()];

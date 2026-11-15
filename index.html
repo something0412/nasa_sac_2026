@@ -18,6 +18,7 @@
     <span class="sunLabel">☀️ Sunlight</span>
     <canvas id="forecast" width="900" height="40" aria-label="Sunlight forecast"></canvas>
   </div>
+  <button id="viewBtn" class="viewBtn" title="Switch the map between top-down and 2.5D (V)">🧊 2.5D view</button>
   <div class="clock"><span id="clockDay">Day 1</span><span id="clockHour">00:00</span><span id="scenarioTag" class="tag"></span></div>
 </header>
 
@@ -79,7 +80,7 @@
     </section>
   </div>
 
-  <div class="mapHint">🖐️ Drag to look around · <b>H</b> = back to base</div>
+  <div class="mapHint">🖐️ Drag to look around · <b>H</b> = back to base · <b>V</b> = switch view · <b>scroll</b> = zoom</div>
 </main>
 
 <div id="modal" class="modal" hidden><div class="modalBox" role="dialog" aria-modal="true"><div id="modalBody"></div></div></div>
@@ -90,6 +91,8 @@
 <script src="js/iso.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/render.js"></script>
+<script src="js/render_iso.js"></script>
+<script src="js/view.js"></script>
 <script src="js/apod.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>

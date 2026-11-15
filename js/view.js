@@ -33,6 +33,8 @@
       hitTag: (e) => cur().hitTag(e),
       crewAt: (e) => (cur().crewAt ? cur().crewAt(e) : null), // the astronaut under the mouse (click to pick them)
       centerOnBase: (state, smooth) => cur().centerOnBase(state, smooth),
+      centerOnTile: (c, r, smooth) => cur().centerOnTile(c, r, smooth),
+      screenOf: (c, r) => cur().screenOf(c, r), // grid point → pixels on the map (for the landing animation)
       panStart: () => cur().panStart(),
       panTo: (x, y) => cur().panTo(x, y),
       zoomAt: (e, factor) => { if (cur().zoomAt) cur().zoomAt(e, factor); },

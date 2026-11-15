@@ -22,7 +22,7 @@
       b.className = 'buildBtn';
       b.dataset.type = type;
       b.title = d.desc;
-      b.innerHTML = `<span class="ico">${d.icon}</span><span class="nm">${esc(d.name)}</span><span class="meta">${d.cost} parts${d.power ? ' · ' + d.power + ' kW' : d.makes ? ' · +' + d.makes + ' kW' : d.store ? ' · ' + d.store + ' kWh' : ''}</span><kbd>${i + 1}</kbd>`;
+      b.innerHTML = `<span class="ico">${d.icon}</span><span class="nm">${esc(d.name)}</span><span class="meta">${d.cost} parts${d.power ? ' · ' + d.power + ' kW' : d.makes ? ' · +' + d.makes + ' kW' : d.store ? ' · ' + d.store + ' kWh' : ''}</span>${i < 9 ? `<kbd>${i + 1}</kbd>` : ''}`;
       b.addEventListener('click', () => pickBuild(type));
       menu.appendChild(b);
     });
@@ -32,12 +32,22 @@
       for (const b of menu.children) b.classList.toggle('sel', b.dataset.type === type);
       updateHint();
     }
+    /** Build buttons: dimmed unless an Engineer is picked. Called right away whenever the pick changes. */
+    function syncBuildMenu() {
+      const a = selCrew(), eng = !!a && a.role === 'engineer';
+      for (const b of menu.children) {
+        const d = C.modules[b.dataset.type];
+        b.disabled = !cur || cur.res.parts < d.cost || cur.status !== 'running';
+        b.classList.toggle('locked', !eng);
+        b.title = (eng ? '' : 'Pick an Engineer first. ') + d.desc;
+      }
+    }
     /** Build menu / number keys: only after an Engineer is picked. */
     function pickBuild(type) {
       if (!type || selected === type) { select(null); return; }
       const a = selCrew();
       if (!a || a.role !== 'engineer') {
-        nudge(a ? `${a.name} is the ${RI[a.role].name}. Only Engineers (Astronaut 1 and 2) can build.` : 'First pick an Engineer (Astronaut 1 or 2), then choose what to build.');
+        nudge(a ? `${a.name} is the ${RI[a.role].name}. Only Engineers can build.` : 'First pick an Engineer, then choose what to build.');
         return;
       }
       select(type);
@@ -47,7 +57,8 @@
       const a = selCrew();
       if (!a) selectedCrew = null;
       if (selected && (!a || a.role !== 'engineer')) select(null);
-      if (cur) { renderCrewPick(cur); renderAms(cur); }
+      syncBuildMenu();
+      if (cur) { renderCrewPick(cur); renderAms(cur); renderActions(cur); }
       updateHint();
     }
     // The hint above the supplies says what the picked astronaut can do.
@@ -106,6 +117,8 @@
     applyPanels();
 
     $('bermBtn').addEventListener('click', handlers.berm);
+    // (HABs and Landing Pads are in the build menu like everything else.)
+    $('roverBtn').addEventListener('click', handlers.rover);
     // AMS: "🏥 Heal" buttons, and click a card to pick that astronaut (redrawn every game hour, so listen on the container).
     $('ams').addEventListener('click', (e) => {
       const b = e.target.closest('[data-heal]');
@@ -143,9 +156,9 @@
       cur = state;
       if (selectedCrew && !selCrew()) selectCrew(null); // sent home to Earth, or in the medbay for good
       const h = state.hour;
-      $('clockDay').textContent = `Day ${Math.min(30, Math.floor(h / 24) + 1)} / 30`;
+      $('clockDay').textContent = `Day ${Math.floor(h / 24) + 1}`;
       $('clockHour').textContent = String(h % 24).padStart(2, '0') + ':00';
-      $('scenarioTag').textContent = state.scenario === 'history' ? 'REAL DATA: May 2024' : 'Training mission';
+      $('scenarioTag').textContent = state.scenario === 'history' ? (h < C.chunkH ? 'REAL DATA: May 2024' : 'After May 2024: random') : 'Training mission';
       $('scenarioTag').className = 'tag' + (state.scenario === 'history' ? ' real' : '');
 
       for (const b of barDefs) {
@@ -176,20 +189,10 @@
 
       syncBanners(state);
       $('parts').textContent = state.res.parts;
-      const eng = selCrew() && selCrew().role === 'engineer';
-      for (const b of menu.children) {
-        b.disabled = state.res.parts < C.modules[b.dataset.type].cost || state.status !== 'running';
-        b.classList.toggle('locked', !eng);
-        b.title = (eng ? '' : 'Pick an Engineer (Astronaut 1 or 2) first. ') + C.modules[b.dataset.type].desc;
-      }
+      syncBuildMenu();
       if (selected && state.res.parts < C.modules[selected].cost) select(null);
       renderCrewPick(state);
-
-      const bb = $('bermBtn');
-      bb.disabled = state.berm.built || state.berm.building || state.status !== 'running';
-      bb.innerHTML = state.berm.built ? '⛰️ Habitat shielded ✓ <small>(blocks 80% of radiation)</small>'
-        : state.berm.building ? `⛰️ Piling moon dirt… ${Math.round((state.berm.progress / C.bermWork) * 100)}%`
-          : '⛰️ Shield habitat with moon dirt <small>(0 parts, 36 crew-hours, pick an Engineer first)</small>';
+      renderActions(state);
       const sb = $('shelterBtn');
       const hasS = MT.Sim.hasShelter(state);
       sb.disabled = !hasS || state.status !== 'running';
@@ -199,7 +202,7 @@
 
       // Work queue: each job has the one Engineer the player picked.
       const jobs = MT.Sim.jobList(state);
-      const jobName = (j) => j.kind === 'berm' ? 'Habitat shielding' : (j.kind === 'repair' ? 'Repair ' : '') + C.modules[j.m.type].name;
+      const jobName = (j) => j.kind === 'berm' ? `${MT.Sim.habName(state, j.m)} shielding` : (j.kind === 'repair' ? 'Repair ' : '') + C.modules[j.m.type].name;
       const why = (a) => a.heal ? ' (resting in the medbay)' : MT.Sim.isGrounded(a) ? ' (grounded: weak bones)' : a.where === 'gym' ? ' (training first)' : '';
       let jl = '';
       if (jobs.length) {
@@ -229,10 +232,33 @@
       $('log').innerHTML = items.map((l) => `<li class="${l.level}"><b>D${Math.floor(l.h / 24) + 1} ${String(l.h % 24).padStart(2, '0')}h</b> ${esc(l.text)}</li>`).join('');
     }
 
+    // ----- Build panel buttons: rover, moon-dirt shield (they depend on who is picked) -----
+    function renderActions(state) {
+      const running = state.status === 'running';
+      const rb = $('roverBtn'), rv = state.rover, n = MT.Sim.habs(state).length;
+      if (!rv) {
+        rb.disabled = !running || state.res.parts < C.rover.cost;
+        rb.innerHTML = `🚙 Build a rover <small>(${C.rover.cost} parts · fast travel between HABs)</small>`;
+      } else {
+        const at = state.modules.find((m) => m.id === rv.habId);
+        rb.disabled = !running || !!rv.trip;
+        rb.innerHTML = rv.trip ? '🚙 Rover is driving…' : `🚙 Rover at ${MT.Sim.habName(state, at)}: fast travel <small>(${n > 1 ? `up to ${C.rover.seats} astronauts` : 'needs a 2nd HAB'})</small>`;
+      }
+      // The shield goes on the picked astronaut's HAB (or HAB 1).
+      const a = selCrew(), H = a ? MT.Sim.homeOf(state, a) : MT.Sim.habs(state)[0], B = H.berm;
+      const name = n > 1 ? MT.Sim.habName(state, H) : 'habitat';
+      const bb = $('bermBtn');
+      bb.disabled = B.built || B.building || !running;
+      bb.innerHTML = B.built ? `⛰️ ${n > 1 ? name : 'Habitat'} shielded ✓ <small>(blocks 80% of radiation)</small>`
+        : B.building ? `⛰️ Piling moon dirt on ${name}… ${Math.round((B.progress / C.bermWork) * 100)}%`
+          : `⛰️ Shield ${name} with moon dirt <small>(0 parts, 36 crew-hours, pick an Engineer first)</small>`;
+    }
+
     // ----- astronaut picker at the top of the Build panel -----
     let lastPick = '';
     function statusOf(a, jobs) {
       if (a.medbay) return 'in the medbay';
+      if (a.trip) return 'in the rover';
       if (a.heal) return `healing ${Math.ceil(a.heal.left)} h`;
       if (a.task) return { lab: 'researching', greenhouse: 'in greenhouse', tower: 'at the tower' }[a.task.kind] + (a.task.kind === 'tower' ? '' : ` ${a.task.left} h`);
       if (a.where === 'shelter') return 'in the shelter';
@@ -252,13 +278,15 @@
       if (html !== lastPick) { $('crewPick').innerHTML = html; lastPick = html; }
     }
 
-    // ----- Astronaut Management System: one card per astronaut -----
+    // ----- Astronaut Management System: one compact card per astronaut (the list scrolls when it is long) -----
     let lastAms = '';
     function renderAms(state) {
       const A = C.astro, jobs = MT.Sim.jobList(state);
       const M = A.medbay, usesLeft = M.uses - state.medbayUses;
+      const manyHabs = MT.Sim.habs(state).length > 1;
       const place = (a) => {
         if (a.medbay) return '🏥 In the medbay for good (bones too weak)';
+        if (a.trip) { const t = state.rover && state.rover.trip, to = t && state.modules.find((m) => m.id === t.to); return `🚙 Riding the rover${to ? ' to ' + MT.Sim.habName(state, to) : ''}`; }
         if (a.heal) return `🏥 Healing in the medbay (+${Math.round(a.heal.amount)} HP) · ${Math.ceil(a.heal.left)} h left`;
         if (a.task && a.task.kind === 'lab') return `🔬 Researching faster ${C.modules[a.task.target].name}s · ${a.task.left} h left`;
         if (a.task && a.task.kind === 'greenhouse') return `🌱 Tending the greenhouse (${C.botany.mult}x food) · ${a.task.left} h left`;
@@ -272,7 +300,7 @@
           return '🔧 Outside: ' + (!j ? 'working' : j.kind === 'berm' ? 'piling moon dirt' : (j.kind === 'repair' ? 'repairing ' : 'building ') + C.modules[j.m.type].name);
         }
         const queued = jobs.filter((j) => j.assignee === a.id).length;
-        return '🏠 In the habitat' + (queued ? ` · ${queued} job${queued > 1 ? 's' : ''} waiting` : '');
+        return `🏠 In ${manyHabs ? MT.Sim.habName(state, MT.Sim.homeOf(state, a)) : 'the habitat'}` + (queued ? ` · ${queued} job${queued > 1 ? 's' : ''} waiting` : '');
       };
       const pct = (v) => Math.max(0, Math.min(100, v)).toFixed(1);
       const bar = (label, v, lvl, title) => `<div class="amsStat" data-level="${lvl}" title="${esc(title)}"><span>${label}</span><div class="track"><div class="fill" style="width:${pct(v)}%"></div></div><b>${Math.round(v)}</b></div>`;
@@ -283,45 +311,45 @@
         const title = `Health ${Math.round(a.hp)} HP. Radiation so far: ${Math.round(a.dose)} mSv (600 mSv = all health). ` +
           `PURPLE = radiation damage, it never heals: the most this astronaut can ever get back to is ${Math.round(cap)} HP. ` +
           (a.wounds.length ? `Injuries: ${a.wounds.map((w) => `${w.what} -${Math.round(w.hp)}`).join(', ')}. The medbay heals ${A.medbay.healHp} HP per treatment.` : 'No injuries.');
-        return `<div class="amsStat" data-level="${lvl}" title="${esc(title)}"><span>❤️ Health</span><div class="track hpTrack"><div class="fill" style="width:${pct(a.hp)}%"></div><div class="radCap" style="width:${pct(100 - cap)}%"></div></div><b>${Math.round(a.hp)}</b></div>`;
+        return `<div class="amsStat" data-level="${lvl}" title="${esc(title)}"><span>❤️</span><div class="track hpTrack"><div class="fill" style="width:${pct(a.hp)}%"></div><div class="radCap" style="width:${pct(100 - cap)}%"></div></div><b>${Math.round(a.hp)}</b></div>`;
       };
       const home = state.sentHome || [];
-      const html = `<div class="amsTop" title="The medbay can give ${M.uses} treatments in the whole mission. Each takes ${M.healH / 24} days and heals ${M.healHp} HP of injuries (never past the purple radiation limit).">🏥 Medbay treatments left: <b>${usesLeft} / ${M.uses}</b></div>` +
-        (home.length ? `<div class="amsTop" title="Their health bar ran out, so they were medically retired. If everyone is sent home, the mission ends.">🚀 Sent home to Earth: <b>${home.map((a) => esc(a.name)).join(', ')}</b></div>` : '') + state.crew.map((a) => {
+      const html = `<div class="amsTop" title="The medbay can give ${M.uses} treatments, and every crew spaceship restocks it. Each takes ${M.healH / 24} days and heals ${M.healHp} HP of injuries (never past the purple radiation limit).">🏥 Medbay: <b>${usesLeft}/${M.uses}</b> · 👩‍🚀 Crew: <b>${MT.Sim.activeCrew(state).length}</b>` +
+        (home.length ? ` · <span title="Medically retired (health ran out): ${home.map((a) => esc(a.name)).join(', ')}">🚀 Sent home: <b>${home.length}</b></span>` : '') + '</div>' + state.crew.map((a) => {
+        // Flags are just icons (hover for the full text) to keep each card small.
         const flags = [];
-        const B = A.bone;
-        if (!a.medbay && MT.Sim.isSlow(a)) flags.push('<span class="flag warn" title="Stress is high: works at half speed">😰 Slow</span>');
-        if (!a.medbay && a.bone < B.severeBelow) flags.push(`<span class="flag bad" title="Below ${B.severeBelow}%: injuries ${B.severeMult}x, extra stress, training half as effective. At 0% they go to the medbay for good.">🦴 Severe</span>`);
-        else if (!a.medbay && a.bone < B.fragileBelow) flags.push(`<span class="flag bad" title="Below ${B.fragileBelow}%: fractures ${B.fragileMult}x as likely and as harmful, extra stress, and not allowed outside">🦴 Fragile</span>`);
-        else if (!a.medbay && MT.Sim.isGrounded(a)) flags.push(`<span class="flag bad" title="Bone density below ${B.groundedBelow}%: not allowed outside">🦴 Grounded</span>`);
-        else if (!a.medbay && a.bone < B.injuryBelow) flags.push(`<span class="flag warn" title="Bone density below ${B.injuryBelow}%: can get small injuries">🦴 Weak bones</span>`);
-        if (!a.medbay && a.sinceGym >= B.visitEveryH && a.where !== 'gym') flags.push(`<span class="flag warn" title="No exercise for ${Math.floor(a.sinceGym)} hours. Pick them and click a Fitness Center (2 h).">🏋️ Needs training</span>`);
+        const B = A.bone, flag = (lvl, icon, title) => flags.push(`<span class="flag ${lvl}" title="${esc(title)}">${icon}</span>`);
+        if (!a.medbay && MT.Sim.isSlow(a)) flag('warn', '😰', 'Slow: stress is high, works at half speed');
+        if (!a.medbay && a.bone < B.severeBelow) flag('bad', '🦴', `Severe bone loss (below ${B.severeBelow}%): injuries ${B.severeMult}x, extra stress, training half as effective. At 0% they go to the medbay for good.`);
+        else if (!a.medbay && a.bone < B.fragileBelow) flag('bad', '🦴', `Fragile bones (below ${B.fragileBelow}%): fractures ${B.fragileMult}x as likely and as harmful, extra stress, not allowed outside`);
+        else if (!a.medbay && MT.Sim.isGrounded(a)) flag('bad', '🦴', `Grounded: bone density below ${B.groundedBelow}%, not allowed outside`);
+        else if (!a.medbay && a.bone < B.injuryBelow) flag('warn', '🦴', `Weak bones: below ${B.injuryBelow}%, can get small injuries`);
+        if (!a.medbay && a.sinceGym >= B.visitEveryH && a.where !== 'gym') flag('warn', '🏋️', `Needs training: no exercise for ${Math.floor(a.sinceGym)} hours. Pick them and click a Fitness Center (2 h).`);
         let healBtn = '';
         if (!a.medbay && !a.heal && a.wounds.length) {
           const amt = MT.Sim.healAmount(a);
           const capped = amt < M.healHp ? ` Only ${Math.round(amt)} HP here: health can't go past the purple radiation limit.` : '';
           healBtn = usesLeft > 0
-            ? `<button class="healBtn" data-heal="${a.id}" title="Rest ${M.healH / 24} days in the medbay to heal ${M.healHp} HP of injuries.${capped} Uses 1 of ${usesLeft} treatments left.">🏥 Heal +${Math.round(amt)} HP (${M.healH / 24} days)</button>`
-            : '<span class="muted small">🏥 Medbay supplies used up</span>';
+            ? `<button class="healBtn" data-heal="${a.id}" title="Rest ${M.healH / 24} days in the medbay to heal ${M.healHp} HP of injuries.${capped} Uses 1 of ${usesLeft} treatments left.">🏥 +${Math.round(amt)}</button>`
+            : '<span class="muted small" title="Medbay supplies used up until the next crew spaceship">🏥 0</span>';
         }
         const hpL = a.hp < 25 ? 'bad' : a.hp < 50 ? 'warn' : 'ok';
         const stL = a.stress >= A.stress.slowAt ? 'bad' : a.stress >= 50 ? 'warn' : 'ok';
         const boL = a.bone < A.bone.groundedBelow ? 'bad' : a.bone < A.bone.injuryBelow ? 'warn' : 'ok';
-        const r = RI[a.role];
+        const r = RI[a.role], where = place(a);
         return `<div class="amsRow${a.medbay ? ' gone' : ''}${selectedCrew === a.id ? ' sel' : ''}"${a.medbay ? '' : ` data-crew="${a.id}" title="Click to pick ${esc(a.name)}"`}>
-          <div class="amsHead"><span class="amsId">${a.id}</span><b>${esc(a.name)}</b><span class="role" style="--rc:${r.color}" title="${r.name}: ${r.does}">${r.icon} ${r.name}</span>${flags.join('')}</div>
-          <div class="amsWhere">${place(a)}</div>
-          ${a.medbay ? '' : hpBar(a, hpL)
-            + bar('😰 Stress', a.stress, stL, `Goes up when working alone outside and when caught in storms or meteor showers. At ${A.stress.slowAt}+ they work at half speed. A visit to an Astronomy Tower lowers it by ${A.stress.towerRelief}; training in a Fitness Center lowers it by ${A.stress.gymReliefPerH} per hour.`)
-            + bar('🦴 Bones', a.bone, boL, `Bone density (%). Drops in Moon gravity; the Fitness Center builds it back. Below ${A.bone.injuryBelow}%: injuries. ${A.bone.groundedBelow}%: grounded. ${A.bone.fragileBelow}%: fragile (fractures). ${A.bone.severeBelow}%: severe. 0%: medbay for good.`)}
-          ${healBtn}
+          <div class="amsHead"><span class="amsId" style="--rc:${r.color}" title="${r.name}: ${r.does}">${a.id}</span><span class="rIco" title="${r.name}">${r.icon}</span><b>${esc(a.name)}</b>${flags.join('')}${healBtn}</div>
+          <div class="amsWhere" title="${esc(where)}">${where}</div>
+          ${a.medbay ? '' : '<div class="amsBars">' + hpBar(a, hpL)
+            + bar('😰', a.stress, stL, `Stress ${Math.round(a.stress)}. Goes up when working alone outside and when caught in storms or meteor showers. At ${A.stress.slowAt}+ they work at half speed. A visit to an Astronomy Tower lowers it by ${A.stress.towerRelief}; training in a Fitness Center lowers it by ${A.stress.gymReliefPerH} per hour.`)
+            + bar('🦴', a.bone, boL, `Bone density ${Math.round(a.bone)}%. Drops in Moon gravity; the Fitness Center builds it back. Below ${A.bone.injuryBelow}%: injuries. ${A.bone.groundedBelow}%: grounded. ${A.bone.fragileBelow}%: fragile (fractures). ${A.bone.severeBelow}%: severe. 0%: medbay for good.`) + '</div>'}
         </div>`;
       }).join('');
       if (html !== lastAms) { $('ams').innerHTML = html; lastAms = html; }
     }
 
     function capcom(ev) {
-      $('capcomText').textContent = ev.title + (ev.text ? ' — ' + ev.text : '');
+      $('capcomText').textContent = (ev.title || '') + (ev.text ? (ev.title ? ' — ' : '') + ev.text : '');
       const el = $('capcom');
       el.dataset.level = ev.level;
       if (el.classList.contains('collapsed')) el.classList.add('unread'); // show a dot on the CAPCOM button
@@ -365,6 +393,11 @@
             lines.push(s ? `🔬 ${esc(s.name)} is researching faster ${C.modules[s.task.target].name}s: ${s.task.left} h left`
               : held ? `⏸ Research on hold (${held.paused.left} h left): pick ${esc(held.name)} and click to continue` : '💤 Nobody researching');
             if (!m.damaged) lines.push(`Boosts machines within ${R.radius} tiles (dashed circle).`, `<i>Pick the Scientist, then click to research (next upgrade: ${MT.Sim.researchCost(state)} parts, 1 day).</i>`);
+          } else if (m.type === 'pad') {
+            const ok = MT.Sim.landingSpots(state).some((sp) => sp.pad === m);
+            lines.push(ok ? '✅ Ready: a finished HAB is close enough. Crew spaceships can land here.' : `⚠️ No finished HAB within ${C.pad.radius} squares: spaceships can't land here yet.`);
+            const next = (state.ships || []).find((sh) => !sh.arrived);
+            if (next) lines.push(`Next crew spaceship: day ${Math.floor(next.h / 24) + 1}`);
           } else lines.push(!m.on ? 'Turned OFF by you' : m.powered ? `✅ Running (uses ${r1(MT.Sim.needOf(state, m))} kW)` : '⚡ NO POWER');
           if (R.targets.includes(m.type) && state.research[m.type]) {
             const x = 1 + state.research[m.type] * R.levelBoost;
@@ -386,8 +419,14 @@
           if (m.damaged) {
             lines.push(['gym', 'tower', 'lab'].includes(m.type) ? '🔧 DAMAGED: cannot be used' : '🔧 DAMAGED: works at half speed');
             lines.push(m.repair ? `Repair (${nameOf(m.repair.worker)}): ${Math.round((m.repair.progress / m.repair.work) * 100)}%` : `<i>Pick an Engineer, then click to repair (${C.damage.repairCost} part).</i>`);
-          } else if (!['hab', 'battery', 'shelter', 'tower', 'lab'].includes(m.type)) lines.push(`<i>Click${['greenhouse', 'gym'].includes(m.type) ? ' with nobody picked' : ''} to turn ${m.on ? 'OFF' : 'ON'}</i>`);
-          if (m.type === 'hab' && state.berm.building && !state.berm.built) lines.push(`⛰️ Shield: ${nameOf(state.berm.worker)}'s job. <i>Pick an Engineer and click to give it to them.</i>`);
+          } else if (!['hab', 'battery', 'shelter', 'tower', 'lab', 'pad'].includes(m.type)) lines.push(`<i>Click${['greenhouse', 'gym'].includes(m.type) ? ' with nobody picked' : ''} to turn ${m.on ? 'OFF' : 'ON'}</i>`);
+          if (m.type === 'hab') {
+            const who = state.crew.filter((a) => MT.Sim.homeOf(state, a) === m);
+            lines.unshift(`<b>${MT.Sim.habName(state, m)}</b> · ${r1(m.temp)} °C${m.temp < C.habTemp.fail ? ' 🥶 TOO COLD: crew inside lose health!' : ''} · ${m.berm.built ? '⛰️ shielded' : 'not shielded'}`,
+              `Lives here: ${who.length ? who.map((a) => esc(a.name)).join(', ') : 'nobody'}`);
+            if (state.rover && state.rover.habId === m.id && !state.rover.trip) lines.push('🚙 The rover is parked here');
+          }
+          if (m.type === 'hab' && m.berm.building && !m.berm.built) lines.push(`⛰️ Shield: ${nameOf(m.berm.worker)}'s job. <i>Pick an Engineer and click to give it to them.</i>`);
         }
         html = `<b>${d.icon} ${esc(d.name)}</b><br>${esc(d.desc)}<br>${lines.join('<br>')}`;
       } else {
@@ -414,14 +453,15 @@
 
     function showStart(onChoose) {
       modal(`
-        <h1>🌙 Shackleton Base</h1>
-        <p class="lead"><b>Mission objective</b> — Establish and sustain Shackleton Base for <b>30 days</b>. Maintain life support, manage supplies, and protect your <b>4 astronauts</b>.</p>
+        <h1>🌙 Zain Base</h1>
+        <p class="lead"><b>Mission objective</b> — Establish Zain Base and protect your first <b>4 astronauts</b> through <b>30 days</b>. Maintain life support, manage supplies, and keep the base running for <b>as many days as you can</b>. It only closes when no astronaut is left on the Moon.</p>
         <div class="howto">
           <div>☀️ <b>Power</b>: the Sun circles the horizon here. Hills block it, so shadows move. Panels in shadow make nothing.</div>
           <div>🫁 <b>Air</b>: the O₂ Generator turns water into oxygen. It needs power AND water.</div>
           <div>🍞 <b>Food</b>: greenhouses grow food but need lots of power.</div>
           <div>☢️ <b>Radiation</b>: solar flares can send radiation storms. Hide the crew in a shelter.</div>
           <div>👩‍🚀 <b>Crew</b>: always <b>pick an astronaut first</b>, then what to build or use. Engineers (1, 2) build and repair, the Scientist (3) researches upgrades, the Botanist (4) tends the greenhouse.</div>
+          <div>🚀 <b>Every 30 days</b> a crew spaceship brings 2 new astronauts, but it can only land on a <b>Landing Pad</b> next to a HAB. Build more HABs for more room, and a <b>rover</b> to drive astronauts between them.</div>
           <div>☄️ <b>Meteor showers</b> and <b>accidents</b> (leaks, plant disease, moondust) cost buildings and supplies. A Research Bay makes nearby machines faster.</div>
         </div>
         <div class="choices">
@@ -437,8 +477,8 @@
 
     function showBriefing(onDone) {
       const lines = [
-        "Shackleton Base, this is Houston. We're receiving your signal loud and clear. Welcome to the lunar south pole, Commander.",
-        "Through Artemis, we're learning how people can explore the Moon and live farther from Earth. Your assignment is to establish a working outpost and demonstrate that your crew can operate here for 30 days.",
+        "Zain Base, this is Houston. We're receiving your signal loud and clear. Welcome to the lunar south pole, Commander.",
+        "Through Artemis, we're learning how people can explore the Moon and live farther from Earth. Your first milestone is to establish a working outpost and demonstrate that your crew can operate here for 30 days. Then keep the base running and prepare for more astronauts to arrive.",
         "You have four astronauts, a habitat, and limited supplies. You'll need to generate electricity, maintain breathable air, secure water and food, and protect your team from the hazards of the lunar surface.",
         "We'll send updates from Houston, but you're commanding this base. Your goal is to bring the entire crew through safely. Houston is standing by, Commander. You have the base.",
       ];
@@ -536,6 +576,103 @@
       $('modalBody').querySelector('[data-a=ok]').addEventListener('click', () => { closeModal(); onClose(); });
     }
 
+    // ----- crew spaceship landing: a cartoon spaceship touches down on the map (plays over both views) -----
+    // TEMPORARY art: plain shapes, meant to be replaced with better models later.
+    // at = {x, y}: where on the map (stage pixels) it touches down; default = the middle of the screen.
+    function playLanding(onDone, text, at) {
+      const el = document.createElement('div');
+      el.className = 'landing';
+      el.setAttribute('aria-hidden', 'true');
+      el.innerHTML = `
+        <div class="lShip">
+          <svg viewBox="0 0 120 170" width="120" height="170">
+            <path d="M60 4 C82 26 88 62 86 104 L34 104 C32 62 38 26 60 4Z" fill="#eef2f7" stroke="#8f96a3" stroke-width="3"/>
+            <path d="M60 4 C70 14 76 26 79 40 L41 40 C44 26 50 14 60 4Z" fill="#ff6b5d"/>
+            <circle cx="60" cy="64" r="12" fill="#7fd0ff" stroke="#5b6576" stroke-width="3"/>
+            <path d="M34 80 L12 116 L14 128 L36 108Z M86 80 L108 116 L106 128 L84 108Z" fill="#ff6b5d" stroke="#b5463c" stroke-width="2"/>
+            <rect x="44" y="104" width="32" height="10" rx="3" fill="#5b6576"/>
+            <path d="M40 114 L28 150 M80 114 L92 150" stroke="#9aa2af" stroke-width="4" stroke-linecap="round"/>
+            <path d="M22 150 L34 150 M86 150 L98 150" stroke="#9aa2af" stroke-width="4" stroke-linecap="round"/>
+            <path class="lFlame" d="M48 116 Q60 168 72 116Z" fill="#ffb347"/>
+          </svg>
+        </div>
+        <div class="lDust"></div>
+        <div class="lText">${esc(text || '🚀 The crew spaceship has landed!')}</div>`;
+      if (at) { el.style.setProperty('--lx', Math.round(at.x) + 'px'); el.style.setProperty('--ly', Math.round(at.y) + 'px'); }
+      $('stage').appendChild(el);
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      setTimeout(() => { el.remove(); onDone(); }, reduce ? 900 : 3600);
+    }
+
+    // ----- new crew: the player picks the job of each new astronaut (the game waits) -----
+    // ----- crew spaceship: which Landing Pad should it land on? (only asked when more than one is ready) -----
+    function showPickPad(state, padIds, onPick) {
+      const pads = padIds.map((id) => state.modules.find((m) => m.id === id)).filter(Boolean);
+      const who = (H) => state.crew.filter((a) => MT.Sim.homeOf(state, a) === H).length;
+      modal(`
+        <h2>🛬 Where should the spaceship land?</h2>
+        <p class="lead">${pads.length} Landing Pads are ready. The new astronauts will live in the HAB closest to the pad you pick.</p>
+        <div class="choices">${pads.map((p) => {
+          const H = MT.Sim.homeForPad(state, p.id);
+          return `<button class="choice" data-pad="${p.id}"><span class="big">🛬</span><b>Pad next to ${MT.Sim.habName(state, H)}</b><span>${who(H)} astronaut${who(H) === 1 ? '' : 's'} live there now.</span></button>`;
+        }).join('')}</div>`);
+      $('modalBody').querySelectorAll('[data-pad]').forEach((b) => b.addEventListener('click', () => { closeModal(); onPick(+b.dataset.pad); }));
+    }
+
+    function showNewCrew(state, padId, onDone) {
+      const n = state.pendingCrew, first = state.nextCrewId;
+      // Their home is always the HAB closest to the Landing Pad they landed on.
+      const home = MT.Sim.homeForPad(state, padId);
+      const defaults = ['engineer', 'scientist', 'botanist'];
+      const rows = Array.from({ length: n }, (_, i) => `
+        <div class="newCrew"><b>Astronaut ${first + i}</b>
+          <div class="roleChoice" role="radiogroup" aria-label="Job for Astronaut ${first + i}">
+            ${Object.keys(RI).map((k) => `<button data-i="${i}" data-role="${k}" class="${k === defaults[i % 3] ? 'on' : ''}" style="--rc:${RI[k].color}" title="${RI[k].does}">${RI[k].icon} ${RI[k].name}</button>`).join('')}
+          </div></div>`).join('');
+      modal(`
+        <h2>🚀 New crew has arrived!</h2>
+        <p class="lead">The spaceship landed with <b>${n} new astronauts</b> and restocked the medbay (${C.astro.medbay.uses}/${C.astro.medbay.uses} treatments). Choose a job for each new astronaut:</p>
+        ${rows}
+        <p class="muted small">🔧 Engineers build and repair · 🔬 Scientists research upgrades · 🌱 Botanists tend greenhouses.</p>
+        <p>🏠 They will live in <b>${MT.Sim.habName(state, home)}</b>, the HAB closest to the Landing Pad. Only a rover trip can move them to another HAB.</p>
+        <div class="row"><button class="primary" data-a="ok">Welcome them</button></div>`);
+      const roles = Array.from({ length: n }, (_, i) => defaults[i % 3]);
+      $('modalBody').querySelectorAll('[data-role]').forEach((b) => b.addEventListener('click', () => {
+        roles[+b.dataset.i] = b.dataset.role;
+        $('modalBody').querySelectorAll(`[data-i="${b.dataset.i}"]`).forEach((x) => x.classList.toggle('on', x === b));
+      }));
+      $('modalBody').querySelector('[data-a=ok]').addEventListener('click', () => { closeModal(); onDone(roles); });
+    }
+
+    // ----- rover: pick up to 4 astronauts at the rover's HAB and where to drive (the game waits) -----
+    function showRover(state, onGo) {
+      const rv = state.rover, habs = MT.Sim.habs(state), at = habs.find((m) => m.id === rv.habId);
+      const riders = MT.Sim.roverRiders(state), dests = habs.filter((m) => m !== at), seats = C.rover.seats;
+      modal(`
+        <h2>🚙 Rover at ${MT.Sim.habName(state, at)}</h2>
+        <p class="lead">Pick up to <b>${seats}</b> astronauts who live at ${MT.Sim.habName(state, at)}, then where to drive. The rover stays at the HAB it drives to.</p>
+        <div class="roverCrew">${riders.length ? riders.map((a) => `<label><input type="checkbox" value="${a.id}"> <span class="amsId" style="--rc:${RI[a.role].color}">${a.id}</span> ${esc(a.name)} <small class="muted">${RI[a.role].icon} ${RI[a.role].name}</small></label>`).join('') : '<p class="muted">Nobody at this HAB is free right now (busy, healing or on a 1-day task).</p>'}</div>
+        <h3>Drive to</h3>
+        <div class="roverDest">${dests.map((m, i) => `<label><input type="radio" name="dest" value="${m.id}"${i === 0 ? ' checked' : ''}> 🏠 ${MT.Sim.habName(state, m)}</label>`).join('')}</div>
+        <p class="rWhy muted small"></p>
+        <div class="row"><button class="primary" data-a="go">Drive</button><button data-a="close">Cancel</button></div>`);
+      const body = $('modalBody'), why = body.querySelector('.rWhy');
+      body.querySelectorAll('.roverCrew input').forEach((c) => c.addEventListener('change', () => {
+        const on = body.querySelectorAll('.roverCrew input:checked');
+        if (on.length > seats) { c.checked = false; why.textContent = `The rover has ${seats} seats.`; } else why.textContent = '';
+      }));
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(); } };
+      function done() { document.removeEventListener('keydown', onKey, true); closeModal(); }
+      document.addEventListener('keydown', onKey, true);
+      body.querySelector('[data-a=close]').addEventListener('click', done);
+      body.querySelector('[data-a=go]').addEventListener('click', () => {
+        const ids = [...body.querySelectorAll('.roverCrew input:checked')].map((c) => +c.value);
+        const dest = body.querySelector('.roverDest input:checked');
+        if (!ids.length) { why.textContent = 'Pick at least one astronaut.'; return; }
+        done(); onGo(+dest.value, ids);
+      });
+    }
+
     // ----- Research Bay: choose what the Scientist researches (the game waits while this is open) -----
     function showResearch(state, who, onPick) {
       const R = C.research, cost = MT.Sim.researchCost(state);
@@ -602,16 +739,22 @@
     function showDebrief(state, onRestart, onMenu) {
       const d = MT.Sim.debrief(state);
       const stars = d.won ? '⭐'.repeat(d.stars) + '☆'.repeat(3 - d.stars) : '';
+      // Best run in this browser, per scenario.
+      const days = Math.floor(state.hour / 24), bestKey = 'mt.best.' + state.scenario;
+      let best = 0;
+      try { best = +localStorage.getItem(bestKey) || 0; if (days > best) localStorage.setItem(bestKey, String(days)); } catch (e) { /* private mode */ }
+      const record = days > best ? '🏆 New record!' : `Best so far: ${best} days`;
       const chain = d.chain.length ? '<h3>What happened (cause → effect)</h3><div class="timeline">' + d.chain.map((c) => `<div class="tl"><span class="when">${esc(c.when)}</span><span>${esc(c.text)}</span></div>`).join('<div class="arrow">↓</div>') + '</div>' : '';
       modal(`
         <h1 class="${d.won ? 'good' : 'bad'}">${d.won ? '🎉' : '🚨'} ${esc(d.title)}</h1>
+        <p class="lead"><b>🌙 ${esc(d.subtitle)}</b> <span class="muted">${record}</span></p>
         ${stars ? `<div class="stars">${stars}</div>` : ''}
         ${chain}
         <h3>Mission charts</h3>
         <canvas id="debriefChart" width="640" height="170"></canvas>
         <div class="legend"><span style="--c:#58c4ff">Oxygen</span><span style="--c:#ffb86b">Food</span><span style="--c:#7fa8ff">Water</span><span style="--c:#5fe08a">Battery</span><span style="--c:#ff5d5d">Crew health (avg)</span></div>
         <div class="statGrid">
-          <div><b>${d.stats.days}</b>days</div><div><b>${state.crew.filter((a) => !a.medbay).length}/${state.crewTotal}</b>astronauts still on the Moon</div><div><b>${d.stats.dose}</b>mSv per astronaut (avg)</div><div><b>${d.stats.foodMade}</b>kg food grown</div>
+          <div><b>${d.stats.days}</b>days</div><div><b>${state.crewTotal}</b>astronauts in total</div><div><b>${d.stats.dose}</b>mSv per astronaut (avg)</div><div><b>${d.stats.foodMade}</b>kg food grown</div>
           <div><b>${d.stats.o2Made}</b>kg O₂ made</div><div><b>${d.stats.waterMined}</b>kg ice mined</div><div><b>${d.stats.solarKwh}</b>kWh solar</div>
         </div>
         ${d.tips.length ? '<h3>' + (d.won ? 'Score' : 'Try this next time') + '</h3><ul class="tips">' + d.tips.map((t) => `<li>${esc(t)}</li>`).join('') + '</ul>' : ''}
@@ -623,7 +766,7 @@
     }
 
     function drawChart(cv, state) {
-      const g = cv.getContext('2d'), W = cv.width, H = cv.height, Hs = state.history, n = C.missionHours;
+      const g = cv.getContext('2d'), W = cv.width, H = cv.height, Hs = state.history, n = Math.max(24, Hs.o2.length);
       g.fillStyle = '#121722'; g.fillRect(0, 0, W, H);
       // darkness bands for the plain (where the habitat is)
       for (let h = 0; h < n; h++) if (!state.light.plain[h]) { g.fillStyle = 'rgba(80,90,130,0.25)'; g.fillRect((h / n) * W, 0, W / n + 0.5, H); }
@@ -636,7 +779,8 @@
       line(Hs.o2, C.caps.o2, '#58c4ff'); line(Hs.food, 150, '#ffb86b'); line(Hs.water, C.caps.water, '#7fa8ff');
       line(Hs.battery, Math.max(1, ...Hs.battery), '#5fe08a'); line(Hs.hp || [], 100, '#ff5d5d');
       g.fillStyle = '#8b93a1'; g.font = '10px system-ui';
-      for (let d = 5; d < 30; d += 5) { const x = ((d * 24) / n) * W; g.fillStyle = '#8b93a1'; g.fillRect(x, H - 4, 1, 4); g.fillText('Day ' + d, x + 3, H - 3); }
+      const step = Math.max(1, Math.ceil(n / 24 / 6 / 5)) * 5; // about 6 day labels, whatever the length
+      for (let d = step; d * 24 < n; d += step) { const x = ((d * 24) / n) * W; g.fillStyle = '#8b93a1'; g.fillRect(x, H - 4, 1, 4); g.fillText('Day ' + d, x + 3, H - 3); }
       g.fillStyle = 'rgba(18,23,34,0.85)'; g.fillRect(0, 0, 300, 16); g.fillStyle = '#c9d1dc'; g.fillText('blue band = plain in shadow · red line = radiation storm', 6, 11);
     }
 
@@ -653,7 +797,7 @@
     function live(state, frac) {
       const now = state.hour + frac;
       const mins = Math.floor((frac * 60) / 10) * 10;
-      setText($('clockDay'), `Day ${Math.min(30, Math.floor(state.hour / 24) + 1)} / 30`);
+      setText($('clockDay'), `Day ${Math.floor(state.hour / 24) + 1}`);
       setText($('clockHour'), String(state.hour % 24).padStart(2, '0') + ':' + String(mins).padStart(2, '0'));
       const items = state.status === 'running' ? MT.Sim.upcoming(state, now) : [];
       const html = items.length
@@ -667,6 +811,8 @@
 
     return {
       togglePanel, live, update, capcom, setSpeed, tooltip, showStart, banner, clearBanners, showDebrief, showTower, showResearch, showSentHome, isModalOpen,
+      playLanding, showNewCrew, showPickPad, showRover,
+
 
       select, pickBuild, selectCrew, nudge,
       get selected() { return selected; }, get selectedCrew() { return selectedCrew; },

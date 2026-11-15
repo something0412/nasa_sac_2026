@@ -59,6 +59,7 @@
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
     let time = 0, dashOffset = 0, frac = 0;
+    let workTime = 0;
     const cam = { x: 0, y: 0, tx: 0, ty: 0, flying: false };
     let tagRect = null; // where the "back to base" tag was drawn (canvas pixels), for clicks
 
@@ -375,6 +376,22 @@
       }
     }
 
+    function drawBuildingHammer(a, m) {
+      const x = a.x - 3, y = a.y - 8; // right-hand side of the left-facing astronaut
+      const targetX = (m.c + m.w) * T - 1;
+      const reach = x - targetX;
+      const cycle = (workTime * 1.4 + a.id * 0.17) % 1;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.PI + Math.sin(cycle * Math.PI));
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(reach * 0.4, 0); ctx.stroke();
+      ctx.fillStyle = '#b88750'; ctx.fillRect(reach * 0.3, -1.5, reach * 0.7, 3);
+      ctx.fillStyle = '#c6d0dd'; ctx.fillRect(reach - 3, -5, 6, 10);
+      ctx.strokeStyle = '#4a5566'; ctx.lineWidth = 0.6; ctx.strokeRect(reach - 3, -5, 6, 10);
+      ctx.restore();
+    }
+
     // ---------- meteor shower animation ----------
     // Meteors streak in from one direction (a shower's "radiant"), flash where they land and kick up dust.
     function spawnMeteors(dt) {
@@ -422,6 +439,7 @@
 
     // ---------- main draw ----------
     function draw(state, dt, ui) {
+      if (!ui.paused && state.status === 'running') workTime += dt;
       if (!ground) { buildGround(state); centerOnBase(state, false); }
       frac = ui.frac || 0;
       time += dt;
@@ -558,6 +576,7 @@
         const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2, init: false }); // dir: way the visor faces
         if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
         const homeC = center(MT.Sim.homeOf(state, A));
+        const job = jobs.find((j) => j.key === A.job);
         let tx = homeC.x + Math.cos(i * 1.57 + 0.8) * 9, ty = homeC.y + Math.sin(i * 1.57 + 0.8) * 9;
         let visible = false;
         // Shelter: the one closest to their HAB.
@@ -570,14 +589,19 @@
           const tm = state.modules.find((m) => m.id === A.task.id);
           if (tm) { const c = center(tm); tx = c.x + Math.sin(time * 1.5 + i) * 2; ty = c.y + 14; visible = true; }
         } else if (A.where === 'outside') {
-          const j = jobs.find((x) => x.key === A.job);
-          const bc = j && j.m ? center(j.m) : homeC; // moon-dirt shield: walk around that HAB
-          const jc = j && j.m && j.kind !== 'berm' ? center(j.m) : { x: bc.x + Math.cos(time * 0.4 + i * 3) * 42, y: bc.y + Math.sin(time * 0.4 + i * 3) * 42 };
+          const bc = job && job.m ? center(job.m) : homeC; // moon-dirt shield: walk around that HAB
+          const jc = job && job.m && job.kind !== 'berm' ? center(job.m) : { x: bc.x + Math.cos(time * 0.4 + i * 3) * 42, y: bc.y + Math.sin(time * 0.4 + i * 3) * 42 };
           tx = jc.x + Math.sin(time * 3 + i) * 3; ty = jc.y + 15; visible = true;
+          if (job?.kind === 'module') { tx = (job.m.c + job.m.w) * T + 15; ty = jc.y; }
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
         if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; a.dir = Math.atan2(dy, dx); } else { a.x = tx; a.y = ty; }
+        const building = state.status === 'running' && job?.active && job.kind === 'module' && Math.hypot(tx - a.x, ty - a.y) < 3;
+        if (building) {
+          const target = center(job.m);
+          a.dir = Math.atan2(target.y - a.y, target.x - a.x);
+        }
         const sel = picked === A;
         a.id = A.id;
         a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
@@ -597,6 +621,7 @@
         ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); // the helmet outline again (the visor path replaced it)
         ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1; ctx.stroke();
         ctx.restore();
+        if (building) drawBuildingHammer(a, job.m);
         // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
         ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
@@ -747,7 +772,7 @@
       fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
     }
 
-    function reset() { ground = null; tagRect = null; zoom = 1; for (const p of pool) p.alive = false; }
+    function reset() { ground = null; tagRect = null; zoom = 1; workTime = 0; for (const p of pool) p.alive = false; }
     /** The astronaut drawn under the mouse (id), or null. */
     function crewAt(evt) {
       const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels

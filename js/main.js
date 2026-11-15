@@ -186,7 +186,7 @@
     if (state) {
       // How far we are into the current game hour (0..1). Used for smooth Sun movement, the clock and countdowns.
       const frac = state.status === 'running' ? Math.min(0.999, acc / MS_PER_HOUR) : 0;
-      renderer.draw(state, dt, { hover, buildType: ui.selected, selectedCrew: ui.selectedCrew, frac, dragging: !!(press && press.dragging) });
+      renderer.draw(state, dt, { hover, buildType: ui.selected, selectedCrew: ui.selectedCrew, frac, dragging: !!(press && press.dragging), paused: speed === 0 || ui.isModalOpen() });
       ui.live(state, frac);
     }
     requestAnimationFrame(frame);

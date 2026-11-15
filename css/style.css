@@ -265,3 +265,23 @@ html, body { height: 100%; overflow: hidden; }
 .panel.unread[data-level=bad] h2 .dot { background: var(--bad); }
 @keyframes dotPulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .panel.unread h2 .dot { animation: none; } }
+
+/* ----- pick an astronaut first (Build panel) + roles ----- */
+.pickLabel { margin-bottom: 4px; }
+.crewPick { display: grid; grid-template-columns: 1fr; gap: 3px; margin-bottom: 8px; }
+.crewBtn { display: grid; grid-template-columns: 18px auto 1fr; align-items: center; column-gap: 6px; text-align: left; padding: 3px 6px; border-left: 3px solid var(--rc); }
+.crewBtn .cr { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.crewBtn small { font-size: 10px; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.crewBtn.sel { border-color: var(--gold); background: #2f2a17; box-shadow: 0 0 0 1px var(--gold) inset; }
+.crewPick.nudge { animation: nudge 0.5s ease-in-out 2; }
+@keyframes nudge { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@media (prefers-reduced-motion: reduce) { .crewPick.nudge { animation: none; outline: 2px solid var(--gold); } }
+.buildBtn.locked:not(:disabled) { opacity: 0.6; }
+#researchLine { margin-top: 4px; }
+#researchLine:empty, #jobLine:empty { display: none; }
+.role { font-size: 10px; padding: 1px 6px; border-radius: 999px; color: var(--rc); border: 1px solid var(--rc); }
+.amsRow[data-crew] { cursor: pointer; }
+.amsRow[data-crew]:hover { border-color: var(--accent); }
+.amsRow.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+.choice:disabled { opacity: 0.45; }

@@ -55,12 +55,15 @@
   <div class="dock right">
     <section class="panel" data-panel="build">
       <header data-toggle="build"><h2>🔨 Build <span class="muted">(parts: <b id="parts">0</b>)</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <div class="pickLabel muted small"><b>1.</b> Pick an astronaut · <b>2.</b> pick what to build, or click a building</div>
+      <div id="crewPick" class="crewPick" role="group" aria-label="Pick an astronaut"></div>
       <div id="buildMenu" class="buildMenu"></div>
       <div class="actions">
         <button id="bermBtn" class="wide">⛰️ Shield habitat with moon dirt <small>(0 parts, 36 crew-hours)</small></button>
         <button id="shelterBtn" class="wide">🛡️ Send crew to shelter</button>
       </div>
       <div id="jobLine" class="muted small"></div>
+      <div id="researchLine" class="muted small"></div>
     </section>
   </div>
 

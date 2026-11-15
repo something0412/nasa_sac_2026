@@ -1,6 +1,7 @@
-# Junior Astronaut Mission Trainer: Zain Base
+# Lunar World
 
-A 2D browser game for NASA Space Apps 2026. You run a Moon base at the lunar south pole and keep it going
+A 2D browser game for NASA Space Apps 2026 (challenge: *Build a Junior Astronaut Mission Trainer*).
+You run Zain Base, a Moon base at the lunar south pole, and keep it going
 for as many days as you can by balancing **power, oxygen, water, food and radiation**. The game is
 endless: it only ends when no astronaut is left on the Moon.
 

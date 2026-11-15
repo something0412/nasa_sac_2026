@@ -1,8 +1,8 @@
 // Small drawing helpers shared by the top-down (render.js) and 2.5D (render_iso.js) renderers:
 // signs drawn on buildings (radiation sign, dumbbell, flask, lightning bolt) and a convex-hull helper.
 // Flat fills only (no images, gradients or blur), so they stay cheap to draw every frame.
-(function () {
-  const MT = (window.MT = window.MT || {});
+(function (root) {
+  const LW = (root.LW = root.LW || {});
   const TAU = Math.PI * 2;
 
   /** Convex hull of [[x, y], ...] (for shadows and round tubes). */
@@ -48,5 +48,5 @@
   /** Battery charge light colour: green, yellow below half, red below 20%. */
   const chargeColor = (f) => (f < 0.2 ? '#ff5d5d' : f < 0.5 ? '#ffc04d' : '#5fe08a');
 
-  MT.Shapes = { hull, pathOf, trefoil, dumbbell, flask, bolt, chargeColor };
-})();
+  LW.Shapes = { hull, pathOf, trefoil, dumbbell, flask, bolt, chargeColor };
+})(typeof window !== 'undefined' ? window : globalThis);

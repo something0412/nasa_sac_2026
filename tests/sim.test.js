@@ -9,7 +9,7 @@ require(path.join(__dirname, '../data/may2024.js'));
 require(path.join(__dirname, '../data/radlab.js'));
 require(path.join(__dirname, '../js/config.js'));
 require(path.join(__dirname, '../js/sim.js'));
-const S = globalThis.MT.Sim;
+const S = globalThis.LW.Sim;
 
 // The game is endless, so a test plays until the base closes or `hours` have passed (default: 30 days).
 function play(scenario, seed, setup, each, hours) {
@@ -26,7 +26,7 @@ function play(scenario, seed, setup, each, hours) {
 
 // Nearest free tile of a zone, measured from the habitat (so tests survive map changes).
 function freeTile(st, zone, type) {
-  const C = globalThis.MT.CONFIG, B = C.base;
+  const C = globalThis.LW.CONFIG, B = C.base;
   let best = null;
   for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) {
     if (S.zoneOf(st, c, r) !== zone || !S.canPlace(st, type, c, r).ok) continue;
@@ -45,7 +45,7 @@ const goodSetup = (st) => {
 };
 const shelterBot = (st, ev) => {
   // Like an alert player: watches the countdown bar (and the red "storm active" bar) and shelters.
-  const on = globalThis.MT.CONFIG.rad.stormOn;
+  const on = globalThis.LW.CONFIG.rad.stormOn;
   const coming = S.upcoming(st, st.hour).some((i) => i.kind === 'storm') || st.stormRate > on;
   if (coming && S.hasShelter(st)) S.setShelter(st, true);
   if (st.sheltering && st.stormRate < on && !st.storms.some((s) => s.h > st.hour - 3 && s.h < st.hour + 3)) S.setShelter(st, false);
@@ -144,7 +144,7 @@ test('crew: 4 named astronauts with roles; each job gets exactly one Engineer', 
 });
 
 test('walking: the Engineer walks from the HAB to the site, and the work only starts when they arrive', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const st = S.create({ scenario: 'training', seed: 4 });
   st.res.parts = 50;
   const H = S.habs(st)[0];
@@ -185,8 +185,26 @@ test('walking: the Engineer walks from the HAB to the site, and the work only st
   assert.ok(Math.abs(eng.walk.from.c - (H.c + 1)) < 1e-9 && Math.abs(eng.walk.from.r - (H.r + 1)) < 1e-9, 'out of the HAB again');
 });
 
+test('instant orders: an order given halfway through an hour starts the walk right then; work starts after arrival', () => {
+  const st = S.create({ scenario: 'training', seed: 4 });
+  st.res.parts = 50;
+  const H = S.habs(st)[0];
+  let spot = null;
+  for (let dc = 9; dc < 20 && !spot; dc++) if (S.canPlace(st, 'battery', H.c + 1 + dc, H.r).ok) spot = { c: H.c + 1 + dc, r: H.r };
+  S.step(st); // the clock is now in hour 1 (the screen shows hour 0 .. 1)
+  const m = S.place(st, 'battery', spot.c, spot.r, 1).m, eng = st.crew[0];
+  S.applyOrders(st, 0.5); // the player clicked halfway through the hour
+  assert.strictEqual(eng.where, 'outside', 'goes out at once');
+  assert.strictEqual(eng.walk.startH, st.hour - 1 + 0.5, 'the walk starts at the moment of the order');
+  const arrive = eng.walk.startH + eng.walk.total;
+  assert.ok(S.walkPoint(st, eng, 0.6), 'on the way a moment later');
+  while (st.hour < arrive) { S.step(st); assert.strictEqual(m.progress, 0, 'no work before they get there'); }
+  S.step(st);
+  assert.ok(m.progress > 0, 'work starts once they are there');
+});
+
 test('health: 600 mSv = all health, so living in the habitat lasts about 2 years', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const hpPerDay = C.rad.surfacePerH * 24 * C.rad.hab * C.astro.hpPerMsv;
   const days = 100 / hpPerDay;
   assert.ok(days > 730 && days < 1000, 'habitat-only survival ~' + Math.round(days) + ' days');
@@ -207,7 +225,7 @@ test('sent home: an astronaut whose health runs out leaves the roster (pop-up), 
   const before = st.stats.foodEaten;
   S.step(st);
   const eaten = st.stats.foodEaten - before;
-  assert.ok(Math.abs(eaten - globalThis.MT.CONFIG.use.foodPerPersonH * 3) < 1e-6, 'only 3 astronauts eat: ' + eaten);
+  assert.ok(Math.abs(eaten - globalThis.LW.CONFIG.use.foodPerPersonH * 3) < 1e-6, 'only 3 astronauts eat: ' + eaten);
   for (const a of st.crew) { a.wounds.push({ hp: 200, what: 'test' }); a.injury = 200; }
   S.step(st);
   assert.strictEqual(st.status, 'lost');
@@ -229,7 +247,7 @@ test('bones at 0% still means the medbay on the Moon (they stay on the roster)',
 
 
 test('bones: the player sends astronauts to the Fitness Center (never automatic); without it they get grounded', () => {
-  const B = globalThis.MT.CONFIG.astro.bone;
+  const B = globalThis.LW.CONFIG.astro.bone;
   const lazy = play('history', 1, (s) => { goodSetup(s); build(s, 'gym', 'plain'); }, shelterBot);
   assert.ok(lazy.crew.every((a) => a.bone < B.groundedBelow), 'a gym nobody is sent to does nothing: ' + lazy.crew.map((a) => Math.round(a.bone)).join(','));
   const gymBot = (s, ev) => {
@@ -246,7 +264,7 @@ test('bones: the player sends astronauts to the Fitness Center (never automatic)
 });
 
 test('bones: 50% fragile and 25% severe make injuries worse; 0% = medbay for good', () => {
-  const B = globalThis.MT.CONFIG.astro.bone;
+  const B = globalThis.LW.CONFIG.astro.bone;
   const st = S.create({ scenario: 'training', seed: 7 });
   const [a, b, c] = st.crew;
   a.bone = B.fragileBelow - 1; b.bone = B.severeBelow - 1; c.bone = 0.01;
@@ -260,7 +278,7 @@ test('bones: 50% fragile and 25% severe make injuries worse; 0% = medbay for goo
 });
 
 test('medbay healing: 3 days, exactly 10 HP (smallest injuries first), never above the radiation limit, 2 uses per mission', () => {
-  const C = globalThis.MT.CONFIG, M = C.astro.medbay;
+  const C = globalThis.LW.CONFIG, M = C.astro.medbay;
   const st = S.create({ scenario: 'training', seed: 2 });
   const [a, b, c] = st.crew;
   a.dose = 120; // 20 HP of radiation damage: can never come back
@@ -288,7 +306,7 @@ test('medbay healing: 3 days, exactly 10 HP (smallest injuries first), never abo
 });
 
 test('stress: rises outside; a tower visit lowers only that astronaut\'s stress, and each tower works every 12 h', () => {
-  const C = globalThis.MT.CONFIG, St = C.astro.stress;
+  const C = globalThis.LW.CONFIG, St = C.astro.stress;
   const st = S.create({ scenario: 'training', seed: 4 });
   const t = freeTile(st, 'plain', 'tower');
   const tower = S.place(st, 'tower', t.c, t.r, 1).m;
@@ -312,7 +330,7 @@ test('stress: rises outside; a tower visit lowers only that astronaut\'s stress,
 });
 
 test('damage: half output until repaired; damaged towers cannot be entered; repair costs 1 part and 1 astronaut', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const st = S.create({ scenario: 'training', seed: 6 });
   const t = freeTile(st, 'plain', 'tower');
   const tower = S.place(st, 'tower', t.c, t.r).m;
@@ -352,7 +370,7 @@ test('roles: only Engineers build and repair; the player picks who does each job
 });
 
 test('Research Bay: Scientist only, 1 day, costs more each time, boosts nearby machines up to 2x', () => {
-  const C = globalThis.MT.CONFIG, R = C.research;
+  const C = globalThis.LW.CONFIG, R = C.research;
   const st = S.create({ scenario: 'training', seed: 5 });
   st.res.parts = 100;
   const o2 = st.modules.find((m) => m.type === 'o2gen');
@@ -414,7 +432,7 @@ test('Research Bay: Scientist only, 1 day, costs more each time, boosts nearby m
 });
 
 test('greenhouse: only the Botanist; a day of tending doubles its food', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const grown = (tend) => {
     const st = S.create({ scenario: 'training', seed: 6 });
     st.res.battery = 30; st.res.parts = 50;
@@ -436,7 +454,7 @@ test('greenhouse: only the Botanist; a day of tending doubles its food', () => {
 });
 
 test('accidents: happen now and then and cost supplies; work accidents injure the Scientist or Botanist', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   let total = 0, kinds = new Set();
   for (let seed = 1; seed <= 6; seed++) {
     const st = play('training', seed, goodSetup, shelterBot);
@@ -462,7 +480,7 @@ test('accidents: happen now and then and cost supplies; work accidents injure th
 });
 
 test('greenhouse: the shelter puts the Botanist\'s day on hold; clicking the greenhouse again finishes the rest', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const st = S.create({ scenario: 'training', seed: 6 });
   st.res.parts = 50;
   const sh = freeTile(st, 'plain', 'shelter');
@@ -484,7 +502,7 @@ test('greenhouse: the shelter puts the Botanist\'s day on hold; clicking the gre
 });
 
 test('Fitness Center: a 2-hour session lowers stress too', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const st = S.create({ scenario: 'training', seed: 4 });
   st.res.parts = 50;
   const t = freeTile(st, 'plain', 'gym');
@@ -510,7 +528,7 @@ test('endless: no win after 30 days; weather, sunlight forecast and cargo keep c
 
 test('running out of oxygen hurts the crew until they are sent home (the only way the game ends)', () => {
   const st = S.create({ scenario: 'training', seed: 4 });
-  const E = globalThis.MT.CONFIG.endless.harm;
+  const E = globalThis.LW.CONFIG.endless.harm;
   st.res.o2 = 0; st.modules.forEach((m) => { if (m.type === 'o2gen') m.on = false; });
   S.step(st);
   assert.strictEqual(st.status, 'running', 'no instant game over any more');
@@ -527,12 +545,12 @@ function instant(st, type, c, r) {
   st.res.parts += 50;
   const res = S.place(st, type, c, r, 1);
   assert.ok(res.ok, `place ${type} at ${c},${r}: ${res.why}`);
-  res.m.built = true; res.m.progress = globalThis.MT.CONFIG.modules[type].work;
+  res.m.built = true; res.m.progress = globalThis.LW.CONFIG.modules[type].work;
   return res.m;
 }
 /** A free spot about `from` squares left of the base where a 2x2 HAB fits. */
 function farHab(st, from) {
-  const B = globalThis.MT.CONFIG.base;
+  const B = globalThis.LW.CONFIG.base;
   const parts = st.res.parts; st.res.parts = 999; // (only looking for room, not paying)
   try { for (let dc = from || 30; dc < 45; dc++) if (S.canPlace(st, 'hab', B.c - dc, B.r).ok) return { c: B.c - dc, r: B.r }; } finally { st.res.parts = parts; }
   assert.fail('no far HAB spot');
@@ -545,7 +563,7 @@ function padSpot(st, H) {
 }
 /** Step to the hour the first crew spaceship comes, keeping everyone alive. */
 function untilShip(st) {
-  const E = globalThis.MT.CONFIG.endless;
+  const E = globalThis.LW.CONFIG.endless;
   st.hour = E.shipEveryH - E.shipWarnH - 2; S.extendWorld(st);
   const seen = { warn: null, land: null, events: [] };
   while (!st.ships[0].arrived) {
@@ -560,7 +578,7 @@ function untilShip(st) {
 }
 
 test('HABs and Landing Pads are built (15 and 10 parts); pads must be close to a HAB; the rover costs 15', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   assert.strictEqual(C.modules.hab.cost, 15); assert.strictEqual(C.modules.pad.cost, 10); assert.strictEqual(C.rover.cost, 15);
   const st = S.create({ scenario: 'training', seed: 2 });
   st.res.parts = 100;
@@ -595,7 +613,7 @@ test('the starting base has a finished Landing Pad next to HAB 1, so the first s
 });
 
 test('crew spaceship: lands only on a Landing Pad next to a finished HAB; the player picks jobs and the home HAB', () => {
-  const E = globalThis.MT.CONFIG.endless;
+  const E = globalThis.LW.CONFIG.endless;
   const st = noPad(S.create({ scenario: 'training', seed: 1 }));
   st.medbayUses = 2;
   const H1 = S.habs(st)[0], p = padSpot(st, H1);
@@ -616,7 +634,7 @@ test('crew spaceship: lands only on a Landing Pad next to a finished HAB; the pl
 });
 
 test('Landing Pads: no two within the same radius; landing on a pad makes its closest HAB the home of the new crew', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const st = noPad(S.create({ scenario: 'training', seed: 4 }));
   const H1 = S.habs(st)[0], p1 = padSpot(st, H1);
   const P1 = instant(st, 'pad', p1.c, p1.r);
@@ -672,7 +690,7 @@ test('each HAB has its own heat and moon-dirt shield', () => {
 });
 
 test('rover: costs 15 parts, carries up to 4 astronauts to another HAB, then stays there', () => {
-  const C = globalThis.MT.CONFIG;
+  const C = globalThis.LW.CONFIG;
   const st = S.create({ scenario: 'training', seed: 3 });
   st.res.parts = 14;
   assert.strictEqual(S.buyRover(st).ok, false, 'needs 15 parts');
@@ -715,7 +733,7 @@ test('rover: fully shielded, so riders get no radiation even during a strong sto
 });
 
 test('parts: the base starts with 25, and a cargo of building parts gives 30', () => {
-  assert.strictEqual(globalThis.MT.CONFIG.cargoOptions.parts.give.parts, 30);
+  assert.strictEqual(globalThis.LW.CONFIG.cargoOptions.parts.give.parts, 30);
   assert.strictEqual(S.create({ scenario: 'training', seed: 1 }).res.parts, 25);
 });
 
@@ -754,7 +772,7 @@ test('countdown bar: cargo always shown, storm only after its warning', () => {
   assert.ok(s, 'storm countdown appears after the warning');
   assert.ok(s.left > 1 && s.left <= 2, 'countdown should start near 2 h, got ' + s.left);
   // With real LRO data the dose doesn't rise exactly at the DONKI alert time, so wait until it really does.
-  const on = globalThis.MT.CONFIG.rad.stormOn;
+  const on = globalThis.LW.CONFIG.rad.stormOn;
   let guard = 0;
   while (st.stormRate <= on && st.status === 'running' && guard++ < 200) S.step(st);
   assert.ok(st.stormRate > on, 'a radiation storm actually arrives');
@@ -780,7 +798,7 @@ test('Astronomy Tower: buildable anywhere, uses no power, cannot be switched off
 
 test('APOD feed: picks the newest IMAGE post, asks for a smaller copy, strips HTML', () => {
   require(path.join(__dirname, '../js/apod.js'));
-  const p = globalThis.MT.APOD._pick([
+  const p = globalThis.LW.APOD._pick([
     { media_type: 'video', hdurl: '', title: 'A video day' },
     { media_type: 'image', date: '2026-11-14', title: 'Apollo 12 &amp; Surveyor 3', explanation: '<strong>Explanation:</strong> Put on <a href="x">glasses</a>.',
       credit: '<a href="y">NASA</a>', permalink: 'https://science.nasa.gov/image-article/x/',
@@ -790,7 +808,7 @@ test('APOD feed: picks the newest IMAGE post, asks for a smaller copy, strips HT
   assert.strictEqual(p.text, 'Put on glasses.', 'tags and the "Explanation:" label are removed');
   assert.strictEqual(p.credit, 'NASA');
   assert.match(p.image, /w=1400&h=1400&fit=clip$/);
-  assert.strictEqual(globalThis.MT.APOD._pick([{ media_type: 'image', hdurl: 'javascript:alert(1)' }]), null, 'only https images');
+  assert.strictEqual(globalThis.LW.APOD._pick([{ media_type: 'image', hdurl: 'javascript:alert(1)' }]), null, 'only https images');
 });
 
 test('tower visits are counted across all towers (only visit 1 shows today\'s picture)', () => {
@@ -804,7 +822,7 @@ test('tower visits are counted across all towers (only visit 1 shows today\'s pi
 
 test('archive picture: random week between 1995-06-16 and the day before today, skips videos and placeholders', async () => {
   require(path.join(__dirname, '../js/apod.js'));
-  const A = globalThis.MT.APOD;
+  const A = globalThis.LW.APOD;
   const urls = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -835,7 +853,7 @@ test('building rules', () => {
   const ridge = freeTile(st, 'ridge', 'solar'), ice = freeTile(st, 'ice', 'drill');
   assert.strictEqual(S.canPlace(st, 'drill', ridge.c, ridge.r).ok, false, 'drill only on ice');
   assert.strictEqual(S.canPlace(st, 'drill', ice.c, ice.r).ok, true);
-  const B = globalThis.MT.CONFIG.base;
+  const B = globalThis.LW.CONFIG.base;
   assert.strictEqual(S.canPlace(st, 'solar', B.c + 1, B.r + 1).ok, false, 'not on top of the habitat');
   assert.strictEqual(S.canPlace(st, 'solar', -1, 0).ok, false, 'not outside the map');
   const before = st.res.parts;
@@ -849,7 +867,7 @@ test('cancel halfway through building: full refund, the Engineer is free again, 
   const t = freeTile(st, 'plain', 'solar');
   const before = st.res.parts;
   const r = S.place(st, 'solar', t.c, t.r, 1);
-  assert.strictEqual(st.res.parts, before - globalThis.MT.CONFIG.modules.solar.cost);
+  assert.strictEqual(st.res.parts, before - globalThis.LW.CONFIG.modules.solar.cost);
   S.step(st); S.step(st);
   assert.ok(r.m.progress > 0 && !r.m.built, 'work has started');
   assert.strictEqual(st.crew[0].where, 'outside');

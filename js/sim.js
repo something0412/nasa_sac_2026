@@ -1,8 +1,8 @@
 // Simulation: the rules of the outpost. No drawing, no DOM. One step() = one game hour.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
-  const cfg = () => MT.CONFIG;
+  const LW = (root.LW = root.LW || {});
+  const cfg = () => LW.CONFIG;
 
   // ---------- helpers ----------
   function rng(seed) {
@@ -300,7 +300,8 @@
   // `total` hours (distance / walking speed). Work only counts once they are there.
   const midOf = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
   const walkAt = (w, t) => { const p = w.total > 0 ? Math.max(0, Math.min(1, (t - w.startH) / w.total)) : 1; return { c: w.from.c + (w.to.c - w.from.c) * p, r: w.from.r + (w.to.r - w.from.r) * p }; };
-  /** Start (or keep) the walk of every Engineer who is outside on a job this hour. */
+  /** Start (or keep) the walk of every Engineer who is outside on a job. h = game time the walk starts:
+   *  the hour being stepped, or (for an order given between hours) the exact moment of the order. */
   function updateWalks(state, jobs, h) {
     for (const a of activeCrew(state)) {
       if (a.where !== 'outside' || !a.job) { a.walk = null; continue; } // inside (or busy elsewhere): the next walk starts at their HAB
@@ -311,20 +312,22 @@
       a.walk = { key: a.job, from, to, startH: h, total: Math.hypot(to.c - from.c, to.r - from.r) / cfg().walk.tilesPerH };
     }
   }
-  /** Whole hours of walking before the work starts: the work begins at the first full hour after they arrive
-   *  (the progress bar moves once per hour, so it never moves while they are still on the way). */
-  const walkHours = (w) => Math.ceil(w.total - 1e-9);
-  /** Does this astronaut work at the site during hour h (1) or are they still walking there (0)? */
-  const workShare = (a, h) => (a.walk && h < a.walk.startH + walkHours(a.walk) ? 0 : 1);
+  /** Does this astronaut work at the site during hour h (1) or are they still walking there (0)? The work
+   *  begins with the first full hour after they arrive (the progress bar moves once per hour, so it never
+   *  moves while they are still on the way). */
+  const workShare = (a, h) => (a.walk && h < a.walk.startH + a.walk.total - 1e-9 ? 0 : 1);
   /** Hours of walking left at time t (game hours), or 0 once they are at the site. */
   const walkLeft = (a, t) => (a.walk && a.where === 'outside' ? Math.max(0, a.walk.startH + a.walk.total - t) : 0);
-  /** Where a walking astronaut is (tile coordinates, for drawing), or null if they are not on the way.
-   *  frac = how far into the current hour the clock is; step(h) covers h..h+1, and after it state.hour is h + 1. */
+  /** The game time shown on screen: step(h) covers h..h+1 and after it state.hour is h + 1, so the picture
+   *  runs one hour behind state.hour. frac = how far into the current hour the clock is. */
+  const shownTime = (state, frac) => state.hour - 1 + (frac || 0);
+  /** Where a walking astronaut is (grid squares, for drawing), or null if they are not on the way.
+   *  p = how far along (0..1), from = where the walk started. */
   function walkPoint(state, a, frac) {
-    const t = state.hour - 1 + (frac || 0);
+    const t = shownTime(state, frac);
     if (!walkLeft(a, t)) return null;
-    const p = walkAt(a.walk, t), dc = a.walk.to.c - a.walk.from.c, dr = a.walk.to.r - a.walk.from.r;
-    return { c: p.c, r: p.r, dc, dr };
+    const w = a.walk, at = walkAt(w, t);
+    return { c: at.c, r: at.r, dc: w.to.c - w.from.c, dr: w.to.r - w.from.r, p: w.total > 0 ? Math.max(0, Math.min(1, (t - w.startH) / w.total)) : 1, from: w.from };
   }
   /** Only working OUTSIDE is unprotected (full radiation). Every building (Research Bay, greenhouse, tower,
    *  gym, medbay) counts as the habitat; the shelter blocks the most. */
@@ -830,6 +833,23 @@
       if (j) a.job = j.key;
     }
     for (const a of free) a.where = a.job ? 'outside' : a.gymLeft > 0 ? 'gym' : 'hab';
+  }
+
+  /**
+   * The player just gave an order (build, repair, gym, tower, shelter, ...): decide who goes where RIGHT NOW,
+   * so the astronaut starts walking at once instead of at the next game hour. No time passes and nothing
+   * random happens (assignCrew only looks at the current state), so saving and loading stay exact.
+   * Returns messages (e.g. "grounded") for CAPCOM.
+   */
+  function applyOrders(state, frac) {
+    if (!state || state.status !== 'running') return [];
+    const ev = [];
+    const say = (level, title, text, extra) => { log(state, level, title + (text ? ' — ' + text : '')); ev.push({ level, title, text, ...extra }); };
+    assignCrew(state, say);
+    // A new building job starts its walk now (frac = how far into the hour the clock is), so the work starts
+    // when the Engineer actually gets there.
+    updateWalks(state, jobList(state), shownTime(state, frac));
+    return ev;
   }
 
   /** A 1-day task (or tower visit) is over. */
@@ -1504,7 +1524,8 @@
     return out.sort((a, b) => a.left - b.left);
   }
 
-  MT.Sim = {
+  LW.Sim = {
+    applyOrders,
     upcoming, stormRateAt,
     walkPoint, walkLeft,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo, orderRepair, startHeal, healAmount, maxHp,

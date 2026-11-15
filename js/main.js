@@ -2,7 +2,8 @@
 (function () {
   'use strict';
   const MT = window.MT;
-  const MS_PER_HOUR = 4000; // 1x speed: 4 real seconds = 1 game hour (30 days = 48 min; ▶▶ 24 min; ▶▶▶ 12 min)
+  // 1x speed: 1 game hour = 2 real seconds (30 days = 24 min; ▶▶ 12 min; ▶▶▶ 6 min).
+  const MS_PER_HOUR = 2000;
 
   let state = null, speed = 1, lastSpeed = 1, acc = 0, last = performance.now();
   let hover = null;
@@ -21,7 +22,7 @@
     berm: () => {
       if (!state || state.status !== 'running') return;
       const a = picked();
-      if (!a || a.role !== 'engineer') { ui.nudge('Pick an Engineer (Astronaut 1 or 2) first, then press the shield button.'); return; }
+      if (!a || a.role !== 'engineer') { ui.nudge('Pick an Engineer first, then press the shield button (it goes on their HAB).'); return; }
       const r = MT.Sim.startBerm(state, a.id);
       if (!r.ok) warn("Can't start the shield", r.why);
       refresh();
@@ -37,6 +38,22 @@
       refresh();
     },
     cargo: (i, opt) => { MT.Sim.chooseCargo(state, i, opt); refresh(); },
+    // Rover: the first press buys it; after that it opens fast travel (the game waits while the dialog is open).
+    rover: () => {
+      if (!state || state.status !== 'running') return;
+      if (!state.rover) {
+        const r = MT.Sim.buyRover(state);
+        r.ok ? ui.capcom({ level: 'good', title: '🚙 Rover ready!', text: 'It is parked at HAB 1. Press the rover button to drive up to 4 astronauts to another HAB.' }) : warn("Can't build the rover", r.why);
+        refresh(); return;
+      }
+      if (MT.Sim.habs(state).length < 2) { warn('Nowhere to drive yet', 'The rover drives between HABs. Build a second HAB first (15 parts).'); return; }
+      ui.tooltip(state, null, false);
+      ui.showRover(state, (to, ids) => {
+        const r = MT.Sim.startTrip(state, to, ids);
+        r.ok ? ui.capcom({ level: 'info', title: '🚙 The rover is on its way', text: `${ids.length} astronaut${ids.length > 1 ? 's' : ''} aboard · about ${r.hours} h.` }) : warn("Can't drive", r.why);
+        refresh();
+      });
+    },
     heal: (id) => {
       if (!state || state.status !== 'running') return;
       const r = MT.Sim.startHeal(state, id);
@@ -88,7 +105,11 @@
     window.__state = state; // handy for debugging in the console
     window.__renderer = renderer;
     refresh();
-    setSpeed(1);
+    // Every game opens with the crew's spaceship touching down at the base (just the animation:
+    // no new astronauts or HAB to place). The clock starts when it has landed.
+    busy = true;
+    setSpeed(0);
+    ui.playLanding(() => { busy = false; setSpeed(1); }, '🚀 Your crew has landed at Zain Base!');
   }
 
   function menu() {
@@ -97,13 +118,43 @@
     ui.showStart((scn) => start(scn));
   }
 
-  // Pop-ups that must be read (an astronaut sent home to Earth). The game waits while one is open.
+  // Pop-ups that must be seen, one after another. The game waits while one is open:
+  //  - an astronaut sent home to Earth
+  //  - the crew spaceship: it lands on a Landing Pad → pick the new astronauts' jobs and their HAB
   const popups = [];
+  let busy = false; // the landing animation is playing
   function nextPopup() {
-    if (!popups.length || ui.isModalOpen() || state.status !== 'running') return;
+    if (busy || !popups.length || ui.isModalOpen() || state.status !== 'running') return;
     const ev = popups.shift();
-    ev.left = MT.Sim.activeCrew(state).length; // count now (two can leave in the same hour)
-    ui.showSentHome(ev, nextPopup);
+    if (ev.popup === 'home') {
+      ev.left = MT.Sim.activeCrew(state).length; // count now (two can leave in the same hour)
+      ui.showSentHome(ev, nextPopup);
+    } else if (ev.ship) {
+      busy = true;
+      const resume = speed;
+      setSpeed(0);
+      ui.tooltip(state, null, false);
+      // Look at the Landing Pad, then the spaceship touches down right on it. The new astronauts live in the
+      // HAB closest to that pad. With more than one ready pad, the player picks where it lands first.
+      const land = (padId) => {
+        const pad = state.modules.find((m) => m.id === padId);
+        let at = null;
+        if (pad) { renderer.centerOnTile(pad.c + pad.w / 2, pad.r + pad.h / 2, false); at = renderer.screenOf(pad.c + pad.w / 2, pad.r + pad.h / 2); }
+        ui.playLanding(() => {
+          busy = false;
+          ui.showNewCrew(state, padId, (roles) => {
+            const added = MT.Sim.joinCrew(state, roles, padId);
+            setSpeed(resume || 1);
+            const home = added.length && MT.Sim.homeOf(state, added[0]);
+            ui.capcom({ level: 'good', title: `👋 Welcome, ${added.map((a) => a.name).join(' and ')}!`, text: home ? `They live in ${MT.Sim.habName(state, home)}, the HAB closest to their Landing Pad. Only a rover trip can move them to another HAB.` : '' });
+            refresh();
+            nextPopup();
+          });
+        }, '🚀 The crew spaceship has landed!', at);
+      };
+      const pads = ev.pads && ev.pads.length ? ev.pads : [ev.padId];
+      if (pads.length > 1) ui.showPickPad(state, pads, land); else land(pads[0]);
+    }
   }
 
   function tick() {
@@ -112,7 +163,7 @@
       if (ev.end) continue;
       ui.capcom(ev);
       if (ev.banner) ui.banner(ev); // drop-down on the map; the game keeps running
-      if (ev.popup === 'home') popups.push(ev);
+      if (ev.popup === 'home' || ev.ship) popups.push(ev);
     }
     nextPopup(); // (if the mission just ended, the debrief explains it instead)
     refresh();
@@ -127,10 +178,10 @@
   function frame(now) {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    if (state && speed > 0 && state.status === 'running' && !ui.isModalOpen()) {
+    if (state && speed > 0 && state.status === 'running' && !ui.isModalOpen() && !busy) {
       acc += dt * 1000 * speed;
       let n = 0;
-      while (acc >= MS_PER_HOUR && n < 8 && speed > 0 && !ui.isModalOpen()) { acc -= MS_PER_HOUR; tick(); n++; }
+      while (acc >= MS_PER_HOUR && n < 8 && speed > 0 && !ui.isModalOpen() && !busy) { acc -= MS_PER_HOUR; tick(); n++; }
     }
     if (state) {
       // How far we are into the current game hour (0..1). Used for smooth Sun movement, the clock and countdowns.
@@ -199,7 +250,7 @@
     const C = MT.CONFIG, a = picked();
     const info = (title, text) => ui.capcom({ level: 'info', title, text });
     if (ui.selected) {
-      if (!a || a.role !== 'engineer') { ui.select(null); ui.nudge('First pick an Engineer (Astronaut 1 or 2), then choose what to build.'); return; }
+      if (!a || a.role !== 'engineer') { ui.select(null); ui.nudge('First pick an Engineer, then choose what to build.'); return; }
       const res = MT.Sim.place(state, ui.selected, t.c, t.r, a.id);
       if (!res.ok) warn("Can't build here", res.why);
       else if (!e.shiftKey && state.res.parts < C.modules[ui.selected].cost) ui.select(null);
@@ -215,10 +266,10 @@
         else { const r = MT.Sim.assignWorker(state, m.id, a.id); r.ok ? info(`👷 ${a.name} will build the ${name}`, 'Each job has exactly one Engineer.') : warn("Can't give this job", r.why); }
       }
       else if (m.type === 'hab') {
-        if (a && state.berm.building && !state.berm.built) { const r = MT.Sim.assignWorker(state, 'berm', a.id); r.ok ? info(`⛰️ ${a.name} will pile the moon dirt`, '') : warn("Can't give this job", r.why); }
+        if (a && m.berm.building && !m.berm.built) { const r = MT.Sim.assignWorker(state, MT.Sim.bermKey(state, m), a.id); r.ok ? info(`⛰️ ${a.name} will pile the moon dirt`, '') : warn("Can't give this job", r.why); }
       }
       else if (m.damaged && (!a || a.role === 'engineer')) { // damaged by a storm or meteors: repair
-        if (!a) ui.nudge(`Pick an Engineer (Astronaut 1 or 2), then click the damaged ${name} to repair it.`);
+        if (!a) ui.nudge(`Pick an Engineer, then click the damaged ${name} to repair it.`);
         else if (m.repair) { const r = MT.Sim.assignWorker(state, m.id, a.id); r.ok ? info(`🔧 ${a.name} will repair the ${name}`, '') : warn("Can't give this job", r.why); }
         else {
           const r = MT.Sim.orderRepair(state, m.id, a.id);
@@ -230,7 +281,7 @@
         else { openTower(m, a); return; }
       }
       else if (m.type === 'lab') {
-        if (!a || a.role !== 'scientist') ui.nudge(a ? `Only the Scientist (Astronaut 3) can use the Research Bay. ${a.name} is the ${C.astro.roleInfo[a.role].name}.` : 'Pick the Scientist (Astronaut 3), then click the Research Bay.');
+        if (!a || a.role !== 'scientist') ui.nudge(a ? `Only Scientists can use the Research Bay. ${a.name} is the ${C.astro.roleInfo[a.role].name}.` : 'Pick a Scientist, then click the Research Bay.');
         else if (a.paused && a.paused.kind === 'lab') { // continue the research that the shelter put on hold
           const r = MT.Sim.resumeTask(state, m.id, a.id);
           r.ok ? info(`🔬 ${a.name} is back in the Research Bay`, `Researching faster ${C.modules[a.task.target].name}s: ${r.left} h left (no extra parts).`) : warn("Can't continue the research", r.why);
@@ -238,7 +289,7 @@
         else { openResearch(m, a); return; }
       }
       else if (m.type === 'greenhouse' && a) {
-        if (a.role !== 'botanist') warn('Only the Botanist can work in the greenhouse', `Pick Astronaut 4 (the Botanist). To turn the greenhouse on or off, press Esc so nobody is picked, then click it.`);
+        if (a.role !== 'botanist') warn('Only Botanists can work in the greenhouse', `Pick a Botanist. To turn the greenhouse on or off, press Esc so nobody is picked, then click it.`);
         else {
           const r = MT.Sim.tendGreenhouse(state, m.id, a.id);
           r.ok ? info(`🌱 ${a.name} is ${r.resumed ? 'back in' : 'tending'} the greenhouse`, `${C.botany.mult}x food for ${r.resumed ? `the ${r.left} hours that were left` : '1 day'}.`) : warn("Can't use the greenhouse", r.why);
@@ -256,7 +307,8 @@
     const crewKey = e.shiftKey && /^Digit[1-9]$/.test(e.code) ? +e.code.slice(5) : 0;
     if (e.code === 'Space') { e.preventDefault(); setSpeed(speed ? 0 : lastSpeed); }
     else if (e.key === 'Escape') { if (ui.selected) ui.select(null); else ui.selectCrew(null); }
-    else if (crewKey && crewKey <= MT.CONFIG.crew) ui.selectCrew(ui.selectedCrew === crewKey ? null : crewKey); // Shift+1..4 = pick an astronaut
+    else if (crewKey) ui.selectCrew(ui.selectedCrew === crewKey ? null : crewKey); // Shift+1..9 = pick astronaut 1..9
+
 
     else if (e.key === 'h' || e.key === 'H') renderer.centerOnBase(state, true);
     else if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) { renderer.toggleView(); hover = null; }

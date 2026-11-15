@@ -286,3 +286,44 @@ html, body { height: 100%; overflow: hidden; }
 .amsRow[data-crew]:hover { border-color: var(--accent); }
 .amsRow.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
 .choice:disabled { opacity: 0.45; }
+
+/* ----- compact AMS: as small as possible, scrolls when the crew grows ----- */
+.ams { gap: 3px; max-height: calc(100vh - 260px); overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+.ams .amsRow { padding: 3px 6px; border-radius: 6px; }
+.ams .amsHead { gap: 4px; flex-wrap: nowrap; font-size: 12px; min-width: 0; }
+.ams .amsHead b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.ams .amsId { width: 16px; height: 16px; font-size: 10px; flex: none; box-shadow: inset 0 0 0 1px var(--rc, transparent); }
+.ams .rIco { font-size: 11px; flex: none; }
+.ams .flag { padding: 0 3px; font-size: 10px; flex: none; border-radius: 4px; }
+.ams .healBtn { margin: 0 0 0 auto; width: auto; flex: none; font-size: 10px; padding: 1px 6px; }
+.ams .amsWhere { font-size: 10px; margin: 1px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amsBars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.amsBars .amsStat { grid-template-columns: 13px 1fr 20px; gap: 3px; font-size: 10px; }
+.amsBars .amsStat .track { height: 5px; }
+.ams .amsTop { font-size: 11px; }
+.crewPick { max-height: 160px; overflow-y: auto; scrollbar-width: thin; }
+
+/* ----- crew spaceship landing (TEMPORARY cartoon, plays over the map in both views) ----- */
+/* --lx / --ly = where it touches down (the Landing Pad on screen); default = the middle of the map. */
+.landing { --lx: 50%; --ly: 50%; position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+.lShip { position: absolute; left: var(--lx); top: -190px; transform: translateX(-50%); animation: lDescend 2.6s cubic-bezier(.2,.7,.3,1) forwards, lBob 0.5s 2.6s ease-out 1; }
+.lShip svg { display: block; filter: drop-shadow(0 8px 10px rgba(0,0,0,.5)); }
+.lFlame { transform-origin: 60px 116px; animation: lFlame 0.12s infinite alternate, lFlameOut 0.4s 2.4s forwards; }
+.lDust { position: absolute; left: var(--lx); top: calc(var(--ly) - 7px); width: 40px; height: 14px; margin-left: -20px; border-radius: 50%; background: rgba(200,200,205,.7); opacity: 0; animation: lDust 1.4s 2.2s ease-out forwards; }
+.lText { position: absolute; left: var(--lx); top: calc(var(--ly) + 26px); transform: translateX(-50%); padding: 6px 14px; border-radius: 999px; background: rgba(12,16,26,.9); border: 1px solid var(--gold); color: var(--gold); font-weight: 700; opacity: 0; animation: lText 0.5s 2.5s forwards; white-space: nowrap; }
+@keyframes lDescend { from { top: -190px; } to { top: calc(var(--ly) - 150px); } } /* the legs (150 px down the picture) end on the spot */
+@keyframes lBob { 50% { margin-top: 4px; } }
+@keyframes lFlame { from { transform: scaleY(1); } to { transform: scaleY(0.6); } }
+@keyframes lFlameOut { to { opacity: 0; } }
+@keyframes lDust { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(9, 4); } }
+@keyframes lText { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .lShip { animation: none; top: calc(var(--ly) - 150px); } .lFlame, .lDust { animation: none; opacity: 0; } .lText { animation: none; opacity: 1; } }
+
+/* ----- new crew roles + rover dialogs ----- */
+.newCrew { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.roleChoice { display: flex; gap: 6px; flex-wrap: wrap; }
+.roleChoice button { border-left: 3px solid var(--rc); }
+.roleChoice button.on { border-color: var(--gold); background: #2f2a17; box-shadow: 0 0 0 1px var(--gold) inset; }
+.roverCrew, .roverDest { display: grid; gap: 4px; margin: 6px 0; }
+.roverCrew label, .roverDest label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.roverCrew .amsId { box-shadow: inset 0 0 0 1px var(--rc, transparent); }

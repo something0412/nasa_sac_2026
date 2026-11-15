@@ -119,18 +119,21 @@ test('2.5D rover dips into the drawn crater and rises smoothly out, including it
     assert.ok(crater, 'generated terrain contains a clear crater for the crossing');
     const depths = [];
     const halfWidth = MT.Iso.TILE_W / 2, halfHeight = MT.Iso.TILE_H / 2;
+    const terraceStep = 14;
+    const topOffset = Math.max(0, ...MT.CONFIG.features.map(feature => feature.height || 0)) * terraceStep;
     let tilted = false;
     for (let sample = 0; sample <= 48; sample++) {
       const x = crater.x + (sample / 48 * 2.4 - 1.2) * crater.radius;
       const y = crater.y;
-      const colsAxis = (x - MT.CONFIG.map.rows * halfWidth) / halfWidth, rowsAxis = y / halfHeight;
+      const colsAxis = (x - MT.CONFIG.map.rows * halfWidth) / halfWidth, rowsAxis = (y - topOffset) / halfHeight;
       position = { c: (colsAxis + rowsAxis) / 2, r: (rowsAxis - colsAxis) / 2, dir: { c: 1, r: 0 }, moving: true };
       roofs.length = 0;
       const before = JSON.stringify(state);
       renderer.draw(state, 0.1, { paused: true });
       assert.equal(JSON.stringify(state), before);
       const roof = roofs.at(-1);
-      const depth = roof.reduce((sum, point) => sum + point[1], 0) / 4 - (y - 8);
+      const groundY = y - MT.CONFIG.heightAt(Math.floor(position.c), Math.floor(position.r)) * terraceStep;
+      const depth = roof.reduce((sum, point) => sum + point[1], 0) / 4 - (groundY - 8);
       depths.push(depth);
       const frontBack = (roof[0][1] + roof[1][1] - roof[2][1] - roof[3][1]) / 2;
       if (Math.abs(frontBack - 2 * 0.28 * halfHeight) > 0.1) tilted = true;

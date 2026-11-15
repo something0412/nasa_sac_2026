@@ -17,7 +17,14 @@
     const C = MT.CONFIG, Iso = MT.Iso;
     const COLS = C.map.cols, ROWS = C.map.rows;
     const HW = Iso.TILE_W / 2, HH = Iso.TILE_H / 2;
-    const WORLD = Iso.worldSize(COLS, ROWS), W = WORLD.w, H = WORLD.h;
+    // Terraces: hills step up and big craters step down (C.heightAt), STEP pixels per level. The world
+    // picture gets TOP pixels of room above the map for the hills and some below it for the craters.
+    const STEP = 14;
+    const MAXH = Math.max(0, ...C.features.map((f) => f.height || 0)), MINH = Math.min(0, ...C.features.map((f) => f.height || 0));
+    const TOP = MAXH * STEP;
+    const WORLD = Iso.worldSize(COLS, ROWS), W = WORLD.w, H = WORLD.h + TOP - MINH * STEP;
+    const hgt = new Int8Array(COLS * ROWS); // terrace level of every square
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) hgt[r * COLS + c] = C.heightAt(c, r);
     const PX_PER_TILE = Math.hypot(HW, HH); // rough screen size of one square, for speeds and lengths
     let VW = 800, VH = 560, DPR = 1; // screen size in CSS pixels
     // ZOOM: 1 = normal, 2 = everything twice as big. The camera then sees VW / zoom world pixels across.
@@ -27,19 +34,31 @@
     const safe = { left: 0, right: 0, top: 0, bottom: 0 }; // screen edges covered by open panels
     const ctx = canvas.getContext('2d');
 
-    let ground = null, zoneGrid = null;
+    let ground = null, zoneGrid = null, masks = null; // masks: where each zone shows on screen, for the terrain shadow
     let craters = [];
     let crew = {}; // astronaut id -> where they stand (grid squares) and where they were drawn (for clicks)
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
     let time = 0, dashOffset = 0, frac = 0;
+    let lift = 0; // pixels the building being drawn is raised by its terrace (see drawModuleOnGround)
     let workTime = 0;
     const cam = { x: 0, y: 0, tx: 0, ty: 0, flying: false };
     let tagRect = null;
 
     // ---------- grid ↔ world helpers ----------
-    const P = (c, r) => Iso.toScreen(c, r, ROWS);            // grid point → world pixel
+    const P = (c, r) => { const p = Iso.toScreen(c, r, ROWS); p.y += TOP; return p; }; // grid point → world pixel (flat ground)
+    const toGrid = (x, y) => Iso.toGrid(x, y - TOP, ROWS);   // world pixel → grid square on flat ground
     const mid = (m) => P(m.c + m.w / 2, m.r + m.h / 2);       // middle of a building's footprint
+    // Terrace level of the square a grid point is in (outside the map = 0), and how many pixels that raises it.
+    const levelAt = (c, r) => { c = Math.floor(c); r = Math.floor(r); return Iso.inMap(c, r, COLS, ROWS) ? hgt[r * COLS + c] : 0; };
+    const liftAt = (c, r) => levelAt(c, r) * STEP;
+    function liftOfRect(c, r, w, h) { // a building stands on the highest square under it
+      let z = -Infinity;
+      for (let dc = 0; dc < w; dc++) for (let dr = 0; dr < h; dr++) z = Math.max(z, liftAt(c + dc, r + dr));
+      return z;
+    }
+    const liftOf = (m) => liftOfRect(m.c, m.r, m.w, m.h);
+    const up = (p, z) => ({ x: p.x, y: p.y - z });
     // A direction in the grid (like "towards the Sun") → the same direction on screen.
     const gridDir = (dc, dr) => ({ x: (dc - dr) * HW, y: (dc + dr) * HH });
     // The 4 corners of a footprint (top, right, bottom, left on screen), shrunk inward by `inset` squares.
@@ -93,12 +112,12 @@
       moveTo(wx - p.x / zoom, wy - p.y / zoom);
     }
     /** Look at a grid point (c, r can be fractions). */
-    function centerOnTile(c, r, smooth) { const p = P(c, r); centerOn(p.x, p.y, smooth); }
+    function centerOnTile(c, r, smooth) { const p = up(P(c, r), liftAt(c, r)); centerOn(p.x, p.y, smooth); }
     /** Where a grid point is on the screen right now (pixels from the map's top-left corner). */
-    function screenOf(c, r) { const p = P(c, r); return { x: (p.x - cam.x) * zoom, y: (p.y - cam.y) * zoom }; }
+    function screenOf(c, r) { const p = up(P(c, r), liftAt(c, r)); return { x: (p.x - cam.x) * zoom, y: (p.y - cam.y) * zoom }; }
     function centerOnBase(state, smooth) {
       const hab = state.modules.find((m) => m.type === 'hab');
-      const p = mid(hab);
+      const p = up(mid(hab), liftOf(hab));
       centerOn(p.x, p.y, smooth);
     }
 
@@ -107,9 +126,17 @@
       const rect = canvas.getBoundingClientRect();
       return { x: ((evt.clientX - rect.left) / rect.width) * VW, y: ((evt.clientY - rect.top) / rect.height) * VH, px: evt.clientX - rect.left, py: evt.clientY - rect.top, scale: VW / rect.width / zoom }; // scale: mouse pixels → world pixels (for dragging)
     }
+    // With terraces, a square's block covers the squares behind it. Look down through the levels: every
+    // square whose block reaches the mouse is a hit, and the one nearest the front (biggest c + r) wins.
     function tileAt(evt) {
-      const p = toCanvas(evt);
-      const g = Iso.toGrid(cam.x + p.x / zoom, cam.y + p.y / zoom, ROWS);
+      const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom;
+      let best = null;
+      for (let L = MAXH; L >= MINH; L -= 0.25) {
+        const g = toGrid(wx, wy + L * STEP);
+        if (!Iso.inMap(g.c, g.r, COLS, ROWS) || levelAt(g.c, g.r) < L) continue;
+        if (!best || g.c + g.r > best.c + best.r) best = g;
+      }
+      const g = best || toGrid(wx, wy);
       return { c: g.c, r: g.r, px: p.px, py: p.py };
     }
     function hitTag(evt) {
@@ -126,9 +153,10 @@
       zoneGrid = new Uint8Array(COLS * ROWS);
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) zoneGrid[r * COLS + c] = ZONE_IDS[MT.Sim.zoneOf(state, c, r)];
 
-      const off = document.createElement('canvas');
-      off.width = W; off.height = H;
-      const g = off.getContext('2d');
+      // 1) A flat "texture" of the Moon: zone colours, dust, small craters and ice sparkles, as if it were flat.
+      const tex = document.createElement('canvas');
+      tex.width = W; tex.height = H;
+      const g = tex.getContext('2d');
       let seed = 1234;
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
       const diamond = (path, c, r) => {
@@ -149,11 +177,12 @@
         g.fillRect(p.x, p.y, s, s);
       }
       const base = document.createElement('canvas'); // the ground before craters (see drawCrater in render.js)
-      base.width = W; base.height = H; base.getContext('2d').drawImage(off, 0, 0);
+      base.width = W; base.height = H; base.getContext('2d').drawImage(tex, 0, 0);
       craters = [];
       for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
       for (const k of craters) MT.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
+      base.width = 0; // free the copy's memory now
       g.restore();
       g.save(); g.clip(paths.ice);
       for (let i = 0; i < 260 * area; i++) {
@@ -163,41 +192,68 @@
       }
       g.restore();
 
-      // Ridge edges: a darker "cliff" strip where high ground meets low ground (the 2.5D look).
-      const cliff = new Path2D(), rim = new Path2D();
-      const isRidge = (c, r) => c >= 0 && r >= 0 && c < COLS && r < ROWS && zoneAt(c, r) === 'ridge';
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-        if (!isRidge(c, r)) continue;
-        const edges = [];
-        if (r + 1 < ROWS && !isRidge(c, r + 1)) edges.push([P(c, r + 1), P(c + 1, r + 1)]); // front-left edge
-        if (c + 1 < COLS && !isRidge(c + 1, r)) edges.push([P(c + 1, r), P(c + 1, r + 1)]); // front-right edge
-        for (const [a, b] of edges) {
-          cliff.moveTo(a.x, a.y); cliff.lineTo(b.x, b.y); cliff.lineTo(b.x, b.y + 7); cliff.lineTo(a.x, a.y + 7); cliff.closePath();
-          rim.moveTo(a.x, a.y); rim.lineTo(b.x, b.y);
+      // 2) The real ground: every square from the back of the map to the front, its piece of the texture
+      //    raised (hill) or sunk (crater) to its terrace level, with block walls down to any lower square in
+      //    front of it. Squares drawn later are nearer, so they cover the ones behind.
+      const out = document.createElement('canvas');
+      out.width = W; out.height = H;
+      const o = out.getContext('2d');
+      // Terrain-shadow masks (see draw): each zone's visible ground, half size to save memory.
+      masks = {};
+      for (const z of ZONE_NAMES) {
+        const m = document.createElement('canvas');
+        m.width = Math.ceil(W / 2); m.height = Math.ceil(H / 2);
+        const mc = m.getContext('2d'); mc.scale(0.5, 0.5); mc.fillStyle = z === 'ice' ? 'rgb(5,8,25)' : 'rgb(5,8,20)';
+        masks[z] = { canvas: m, ctx: mc };
+      }
+      const darken = (hex, k) => { const n = parseInt(hex.slice(1), 16); return rgb([(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v * k)); };
+      const wallL = {}, wallR = {}; // left walls face away from the light more, so they are darker
+      for (const z of ZONE_NAMES) { wallL[z] = darken(C.zones[z].color, 0.55); wallR[z] = darken(C.zones[z].color, 0.75); }
+      for (let s = 0; s <= COLS + ROWS - 2; s++) {
+        for (let c = Math.max(0, s - ROWS + 1); c <= Math.min(COLS - 1, s); c++) {
+          const r = s - c, z = hgt[r * COLS + c] * STEP, zone = zoneAt(c, r);
+          const t = P(c, r), L = P(c, r + 1), B = P(c + 1, r + 1), R = P(c + 1, r);
+          // top: grown by a hair so neighbours overlap and no seams show
+          const top = new Path2D();
+          top.moveTo(t.x, t.y - z - 0.6); top.lineTo(R.x + 1.2, R.y - z); top.lineTo(B.x, B.y - z + 0.6); top.lineTo(L.x - 1.2, L.y - z); top.closePath();
+          const sx = Math.max(0, L.x - 2), sy = Math.max(0, t.y - 1), sw = Math.min(W, R.x + 2) - sx, sh = Math.min(H, B.y + 1) - sy;
+          o.save(); o.clip(top); o.drawImage(tex, sx, sy, sw, sh, sx, sy - z, sw, sh); o.restore();
+          const shapes = [top]; // everything this square covers on screen (top + walls), for the masks
+          // walls: the front-left edge (L→B) faces square (c, r + 1), the front-right edge (B→R) faces (c + 1, r)
+          for (const [a, b, nz, col] of [[L, B, liftAt(c, r + 1), wallL[zone]], [B, R, liftAt(c + 1, r), wallR[zone]]]) {
+            if (nz >= z) continue;
+            const wall = new Path2D();
+            wall.moveTo(a.x, a.y - z); wall.lineTo(b.x, b.y - z); wall.lineTo(b.x, b.y - nz); wall.lineTo(a.x, a.y - nz); wall.closePath();
+            o.fillStyle = col; o.fill(wall);
+            o.strokeStyle = 'rgba(0,0,0,0.2)'; o.lineWidth = 1; o.beginPath(); // a line between stacked blocks
+            for (let k = z - STEP; k > nz; k -= STEP) { o.moveTo(a.x, a.y - k); o.lineTo(b.x, b.y - k); }
+            o.stroke();
+            o.strokeStyle = 'rgba(255,255,255,0.22)'; o.lineWidth = 1.5; // light edge along the top of the step
+            o.beginPath(); o.moveTo(a.x, a.y - z); o.lineTo(b.x, b.y - z); o.stroke();
+            shapes.push(wall);
+          }
+          // faint grid line around the top
+          o.strokeStyle = 'rgba(255,255,255,0.045)'; o.lineWidth = 1;
+          o.beginPath(); o.moveTo(t.x, t.y - z); o.lineTo(R.x, R.y - z); o.lineTo(B.x, B.y - z); o.lineTo(L.x, L.y - z); o.closePath(); o.stroke();
+          // masks: this square's zone gets it; the other zones lose whatever it covers
+          for (const zz of ZONE_NAMES) { const mc = masks[zz].ctx; mc.globalCompositeOperation = zz === zone ? 'source-over' : 'destination-out'; for (const sh of shapes) mc.fill(sh); }
         }
-        if (r > 0 && !isRidge(c, r - 1)) { const a = P(c, r), b = P(c + 1, r); rim.moveTo(a.x, a.y); rim.lineTo(b.x, b.y); }
-        if (c > 0 && !isRidge(c - 1, r)) { const a = P(c, r), b = P(c, r + 1); rim.moveTo(a.x, a.y); rim.lineTo(b.x, b.y); }
       }
-      g.fillStyle = 'rgba(30,30,38,0.55)'; g.fill(cliff);
-      g.strokeStyle = 'rgba(255,255,255,0.22)'; g.lineWidth = 2; g.stroke(rim);
+      tex.width = 0; // free the texture's memory now
 
-      // faint diamond grid
-      g.strokeStyle = 'rgba(255,255,255,0.045)'; g.lineWidth = 1;
-      for (let c = 0; c <= COLS; c++) { const a = P(c, 0), b = P(c, ROWS); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); }
-      for (let r = 0; r <= ROWS; r++) { const a = P(0, r), b = P(COLS, r); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); }
-
-      g.font = 'bold 13px system-ui, sans-serif'; g.textAlign = 'center';
+      o.font = 'bold 13px system-ui, sans-serif'; o.textAlign = 'center';
       for (const f of C.features) {
-        const p = P(f.u * COLS, f.v * ROWS);
-        g.fillStyle = f.zone === 'ice' ? 'rgba(170,210,255,0.75)' : 'rgba(255,255,255,0.6)';
-        g.fillText(f.label, p.x, p.y);
+        const p = up(P(f.u * COLS, f.v * ROWS), liftAt(f.u * COLS, f.v * ROWS));
+        o.fillStyle = f.zone === 'ice' ? 'rgba(170,210,255,0.75)' : 'rgba(255,255,255,0.6)';
+        o.fillText(f.label, p.x, p.y);
       }
-      ground = off;
+      ground = out;
       crew = {};
     }
 
     // ---------- particles (object pool, no new objects per frame) ----------
     function spawn(kind, x, y, vx, vy, life, color) {
+      y -= lift; // a building on a hill draws raised, so its particles start raised too
       for (const p of pool) if (!p.alive) { p.alive = true; p.kind = kind; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.life = 0; p.max = life; p.color = color; return p; }
       return null;
     }
@@ -224,6 +280,14 @@
     const HEIGHT = { hab: 26, solar: 34, battery: 22, o2gen: 18, greenhouse: 20, drill: 32, shelter: 16, gym: 7, tower: 30, lab: 18, pad: 3 };
 
     // ---------- buildings ----------
+    // Buildings are drawn as if on flat ground, moved up (or down into a crater) to their terrace.
+    function drawModuleOnGround(state, m, blink) {
+      lift = liftOf(m);
+      ctx.save(); ctx.translate(0, -lift);
+      drawModule(state, m, blink);
+      ctx.restore();
+      lift = 0;
+    }
     function drawModule(state, m, blink) {
       const on = m.built && m.on && m.powered;
       const ctr = mid(m), ht = HEIGHT[m.type] || 16;
@@ -499,7 +563,7 @@
 
     // ---------- astronauts ----------
     function drawAstronaut(A, a, exposed, danger, blink, sel) {
-      const p = P(a.c, a.r);
+      const p = up(P(a.c, a.r), a.z); // standing on their terrace
       a.x = p.x; a.y = p.y; // remembered for clicks (crewAt)
       // While walking they hop (like Apollo crews did in the Moon's low gravity); the shadow stays on the ground.
       const hop = Math.abs(Math.sin(time * 9 + A.id)) * 4 * (a.walk || 0), y = p.y - hop, sh = 1 - hop / 10;
@@ -519,7 +583,7 @@
       ctx.fillStyle = VISOR; ctx.beginPath(); ctx.ellipse(p.x - 2.2 * s, hy, 3.5, 3, 0, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
       ctx.beginPath(); ctx.arc(p.x, hy, 5, 0, Math.PI * 2); ctx.stroke(); // helmet outline back on top of the visor
-      if (a.building) drawBuildingHammer(a, a.building);
+      if (a.building) { ctx.save(); ctx.translate(0, -a.z); drawBuildingHammer(a, a.building); ctx.restore(); } // mallet on the same terrace as its astronaut
       // number tag (border = role colour) so you can match the astronaut to the AMS list
       ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(p.x - 6, p.y - 35, 12, 10, 3); ctx.fill();
       ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
@@ -553,7 +617,7 @@
       const depth = craterDepthAt(g.x, g.y);
       const pitch = (craterDepthAt(g.x + fw.x, g.y + fw.y) - craterDepthAt(g.x - fw.x, g.y - fw.y)) * 0.5;
       const roll = (craterDepthAt(g.x + sd.x, g.y + sd.y) - craterDepthAt(g.x - sd.x, g.y - sd.y)) * 0.5;
-      g.y += depth;
+      g.y += depth - liftAt(p.c, p.r);
       if (p.moving && Math.random() < 0.5) spawn(1, g.x - fw.x * 1.4, g.y - fw.y * 1.4, (Math.random() - 0.5) * 20, -Math.random() * 10, 0.6, 'rgba(200,200,205,0.7)');
       const f = [
         { x: g.x + fw.x + sd.x, y: g.y + fw.y + sd.y + pitch + roll },
@@ -598,7 +662,7 @@
       const px = ox + dx * t, py = oy + dy * t;
       const ang = Math.atan2(dy, dx);
       // distance in squares between the middle of the screen and the habitat
-      const v = Iso.toGrid(cam.x + vw() / 2, cam.y + vh() / 2, ROWS);
+      const v = toGrid(cam.x + vw() / 2, cam.y + vh() / 2);
       const dist = Math.round((Math.hypot(v.c - (habM.c + 1), v.r - (habM.r + 1)) * METERS_PER_TILE) / 10) * 10;
       const pulse = 0.75 + 0.25 * Math.sin(time * 4);
       ctx.save();
@@ -632,7 +696,7 @@
       }
       const blink = Math.floor(time * 2.5) % 2 === 0;
       const habM = state.modules.find((m) => m.type === 'hab');
-      const hc = mid(habM);
+      const hc = up(mid(habM), liftOf(habM));
 
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.fillStyle = '#0b0e15'; ctx.fillRect(0, 0, VW, VH);
@@ -643,26 +707,20 @@
       if (gw > 0 && gh > 0) ctx.drawImage(ground, gx, gy, gw, gh, gx, gy, gw, gh);
       const VWz = vw(), VHz = vh(); // the part of the world on screen, in world pixels
 
-      // Terrain shadow: each zone gets darker as the Sun slides behind the hills. Only squares on screen.
-      const corners = [[cam.x, cam.y], [cam.x + VWz, cam.y], [cam.x, cam.y + VHz], [cam.x + VWz, cam.y + VHz]].map(([x, y]) => Iso.toGrid(x, y, ROWS));
-      const c0 = Math.max(0, Math.min(...corners.map((g) => g.c)) - 1), c1 = Math.min(COLS - 1, Math.max(...corners.map((g) => g.c)) + 1);
-      const r0 = Math.max(0, Math.min(...corners.map((g) => g.r)) - 1), r1 = Math.min(ROWS - 1, Math.max(...corners.map((g) => g.r)) + 1);
+      // Terrain shadow: each zone gets darker as the Sun slides behind the hills. The masks (made in
+      // buildGround) hold exactly where each zone shows, terrace walls included, so nearer hills stay right.
       const shadeOf = {
         ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
         plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
         ice: 0.35,
       };
-      for (const z of ['ridge', 'plain', 'ice']) {
-        if (shadeOf[z] < 0.005) continue;
-        ctx.fillStyle = z === 'ice' ? 'rgba(5,8,25,0.35)' : `rgba(5,8,20,${shadeOf[z].toFixed(3)})`;
-        ctx.beginPath();
-        for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-          if (zoneAt(c, r) !== z) continue;
-          const t = P(c, r);
-          if (t.x + HW < cam.x || t.x - HW > cam.x + VWz || t.y + 2 * HH < cam.y || t.y > cam.y + VHz) continue;
-          ctx.moveTo(t.x, t.y); ctx.lineTo(t.x + HW, t.y + HH); ctx.lineTo(t.x, t.y + 2 * HH); ctx.lineTo(t.x - HW, t.y + HH); ctx.closePath();
+      if (gw > 0 && gh > 0) {
+        for (const z of ZONE_NAMES) {
+          if (shadeOf[z] < 0.005) continue;
+          ctx.globalAlpha = shadeOf[z];
+          ctx.drawImage(masks[z].canvas, gx / 2, gy / 2, gw / 2, gh / 2, gx, gy, gw, gh);
         }
-        ctx.fill();
+        ctx.globalAlpha = 1;
       }
 
       // Object shadows point AWAY from the Sun, long and soft because the Sun is always low at the pole.
@@ -672,9 +730,9 @@
         const L = lightAt(state, m);
         if (L < 0.02) continue;
         const len = (m.type === 'hab' ? 1.1 : m.type === 'solar' || m.type === 'drill' || m.type === 'tower' ? 0.9 : 0.5) * (1 + (1 - L) * 1.5);
-        const f = footprint(m.c, m.r, m.w, m.h, m.type === 'hab' ? 0.3 : 0.25);
+        const f = footprint(m.c, m.r, m.w, m.h, m.type === 'hab' ? 0.3 : 0.25), z = liftOf(m);
         const off = gridDir(-sg.c * len, -sg.r * len);
-        const pts = f.map((p) => [p.x, p.y]);
+        const pts = f.map((p) => [p.x, p.y - z]);
         const hp = hull(pts.concat(pts.map(([px, py]) => [px + off.x, py + off.y])));
         ctx.fillStyle = `rgba(0,0,0,${(0.28 * L).toFixed(3)})`;
         ctx.beginPath(); ctx.moveTo(hp[0][0], hp[0][1]);
@@ -686,7 +744,7 @@
       ctx.lineWidth = 2;
       for (const m of state.modules) {
         if (!m.built || m === habM) continue; // (extra HABs get a cable to HAB 1)
-        const c = mid(m);
+        const c = up(mid(m), liftOf(m));
         let color, flow = 0;
         if (m.type === 'solar') { const lit = m.light > 0.02 && m.on; color = lit ? '#ffd36b' : '#4a4f5a'; flow = lit ? 1 : 0; }
         else if (m.type === 'battery') {
@@ -697,7 +755,7 @@
         ctx.strokeStyle = color;
         ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
-        const to = m.type === 'hab' ? hc : MT.Sim.habs(state).map(mid).reduce((b, p) => (Math.hypot(p.x - c.x, p.y - c.y) < Math.hypot(b.x - c.x, b.y - c.y) ? p : b), hc); // nearest HAB
+        const to = m.type === 'hab' ? hc : MT.Sim.habs(state).map((h) => up(mid(h), liftOf(h))).reduce((b, p) => (Math.hypot(p.x - c.x, p.y - c.y) < Math.hypot(b.x - c.x, b.y - c.y) ? p : b), hc); // nearest HAB
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(to.x, to.y); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
@@ -707,21 +765,21 @@
       const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
       const hoverM = ui.hover && !ui.buildType && Iso.inMap(ui.hover.c, ui.hover.r, COLS, ROWS) ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
       const rings = [];
-      if (ui.buildType === 'lab' && ui.hover) rings.push({ ...P(ui.hover.c + 0.5, ui.hover.r + 0.5) });
+      if (ui.buildType === 'lab' && ui.hover) rings.push(up(P(ui.hover.c + 0.5, ui.hover.r + 0.5), liftAt(ui.hover.c, ui.hover.r)));
       for (const l of MT.Sim.built(state, 'lab')) {
-        if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...mid(l), dead: l.damaged });
+        if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...up(mid(l), liftOf(l)), dead: l.damaged });
       }
       // Placing a Landing Pad: gold rings show how close to a HAB it must be.
       if (ui.buildType === 'pad') {
         ctx.setLineDash([8, 6]); ctx.lineDashOffset = dashOffset * 0.5; ctx.lineWidth = 2;
         for (const H of state.modules) if (H.type === 'hab') {
-          const p = mid(H), R = C.pad.radius * Math.SQRT2;
+          const p = up(mid(H), liftOf(H)), R = C.pad.radius * Math.SQRT2;
           ctx.beginPath(); ctx.ellipse(p.x, p.y, R * HW, R * HH, 0, 0, Math.PI * 2);
           ctx.fillStyle = 'rgba(255,211,107,0.06)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,211,107,0.8)'; ctx.stroke();
         }
         // Red rings: no new pad may go inside another pad's area.
         for (const P2 of state.modules) if (P2.type === 'pad') {
-          const p = mid(P2), R = C.pad.radius * Math.SQRT2;
+          const p = up(mid(P2), liftOf(P2)), R = C.pad.radius * Math.SQRT2;
           ctx.beginPath(); ctx.ellipse(p.x, p.y, R * HW, R * HH, 0, 0, Math.PI * 2);
           ctx.fillStyle = 'rgba(255,93,93,0.07)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,93,93,0.8)'; ctx.stroke();
         }
@@ -739,7 +797,7 @@
       const jobs = MT.Sim.jobList(state);
       if (picked) {
         ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
-        for (const j of jobs) if (j.assignee === picked.id) { const m = j.m || habM; poly(footprint(m.c, m.r, m.w, m.h, -0.06)); ctx.stroke(); }
+        for (const j of jobs) if (j.assignee === picked.id) { const m = j.m || habM; poly(footprint(m.c, m.r, m.w, m.h, -0.06), liftOf(m)); ctx.stroke(); }
         ctx.setLineDash([]);
       }
 
@@ -775,12 +833,14 @@
           tc = jc.c + 0.38 + Math.sin(time * 3 + i) * 0.07; tr = jc.r + 0.38; visible = true;
           if (job?.kind === 'module') { tc = job.m.c + job.m.w + 0.2; tr = job.m.r + job.m.h / 2; }
         }
-        if (!a.init) { a.c = tc; a.r = tr; a.init = true; }
+        if (!a.init) { a.c = tc; a.r = tr; a.z = null; a.init = true; } // (z: new terrace, e.g. after a rover trip)
         const dc = tc - a.c, dr = tr - a.r, d = Math.hypot(dc, dr), sp = (140 / 40) * dt; // same walking speed as the top-down map
         if (d > sp) {
           a.c += (dc / d) * sp; a.r += (dr / d) * sp;
           if (Math.abs(dc - dr) > d * 0.1) a.face = dc - dr > 0 ? 1 : -1; // on screen, x grows with c - r; straight up/down keeps the last way
         } else { a.c = tc; a.r = tr; }
+        const zT = liftAt(a.c, a.r); // terrace under their feet: step up/down to it quickly instead of popping
+        a.z = a.z == null ? zT : a.z + (zT - a.z) * Math.min(1, dt * 12);
         a.walk = Math.max(0, Math.min(1, (a.walk || 0) + (d > sp ? dt : -dt) * 6)); // 0..1: eases the hopping in and out
         const sel = picked === A;
         a.id = A.id;
@@ -795,7 +855,7 @@
       });
 
       // Draw buildings and people from the back of the map to the front, so nearer things cover farther ones.
-      const things = state.modules.map((m) => ({ depth: m.c + m.w / 2 + m.r + m.h / 2, draw: () => drawModule(state, m, blink) }));
+      const things = state.modules.map((m) => ({ depth: m.c + m.w / 2 + m.r + m.h / 2, draw: () => drawModuleOnGround(state, m, blink) }));
       for (const t of things.concat(people).sort((a, b) => a.depth - b.depth)) t.draw();
 
       // radiation storm particles stream in from the Sun's direction
@@ -854,15 +914,15 @@
         if (ui.buildType) {
           const d = C.modules[ui.buildType];
           const ok = MT.Sim.canPlace(state, ui.buildType, c, r).ok;
-          const f = footprint(c, r, d.w, d.h, 0);
-          poly(f); ctx.fillStyle = ok ? 'rgba(95,224,138,0.25)' : 'rgba(255,93,93,0.25)'; ctx.fill();
+          const f = footprint(c, r, d.w, d.h, 0), z = liftOfRect(c, r, d.w, d.h);
+          poly(f, z); ctx.fillStyle = ok ? 'rgba(95,224,138,0.25)' : 'rgba(255,93,93,0.25)'; ctx.fill();
           ctx.strokeStyle = ok ? '#5fe08a' : '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke();
-          const p = P(c + d.w / 2, r + d.h / 2);
+          const p = up(P(c + d.w / 2, r + d.h / 2), z);
           ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(d.icon, p.x, p.y + 7);
         } else {
           const m = MT.Sim.moduleAt(state, c, r);
           ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
-          poly(m ? footprint(m.c, m.r, m.w, m.h, 0) : footprint(c, r, 1, 1, 0)); ctx.stroke();
+          poly(m ? footprint(m.c, m.r, m.w, m.h, 0) : footprint(c, r, 1, 1, 0), m ? liftOf(m) : liftAt(c, r)); ctx.stroke();
         }
       }
 

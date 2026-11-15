@@ -8,57 +8,74 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand">🌙 <b>Shackleton Base</b> <span class="sub">Junior Astronaut Mission Trainer</span></div>
-  <div class="clock"><span id="clockDay">Day 1</span><span id="clockHour">00:00</span><span id="scenarioTag" class="tag"></span></div>
   <div class="speed" role="group" aria-label="Game speed">
     <button data-speed="0" title="Pause (Space)">⏸</button>
     <button data-speed="1" class="on" title="Normal speed">▶</button>
     <button data-speed="2" title="Fast">▶▶</button>
     <button data-speed="4" title="Very fast">▶▶▶</button>
   </div>
+  <div class="sunBar" title="Sunlight forecast for the whole mission: yellow = Sun shines, dark = shadow, red line = radiation storm, ▲ = now">
+    <span class="sunLabel">☀️ Sunlight</span>
+    <canvas id="forecast" width="900" height="40" aria-label="Sunlight forecast"></canvas>
+  </div>
+  <div class="clock"><span id="clockDay">Day 1</span><span id="clockHour">00:00</span><span id="scenarioTag" class="tag"></span></div>
 </header>
-<div id="countdowns" class="countdowns" aria-live="polite"></div>
 
-<main class="layout">
-  <section class="stage">
-    <div class="canvasWrap"><canvas id="map" width="800" height="560" aria-label="Moon base map"></canvas>
-      <div id="tooltip" class="tooltip" hidden></div>
-      <div id="buildHint" class="buildHint" hidden></div>
-    </div>
-    <div class="forecast">
-      <div class="forecastHead">☀️ Sunlight forecast <span class="muted">(yellow = Sun shines, dark = shadow, ▲ = now)</span></div>
-      <canvas id="forecast" width="800" height="54"></canvas>
-    </div>
-    <div id="capcom" class="capcom"><b>CAPCOM:</b> <span id="capcomText">Standing by.</span></div>
-  </section>
+<main class="stage" id="stage">
+  <canvas id="map" aria-label="Moon base map"></canvas>
+  <div id="tooltip" class="tooltip" hidden></div>
 
-  <aside class="panel">
-    <div class="card">
-      <h2>Supplies</h2>
-      <div id="bars"></div>
-    </div>
-    <div class="card">
-      <h2>Power <span id="powerLine" class="muted"></span></h2>
-      <div id="powerBar" class="powerBar"><div class="make"></div><div class="use"></div></div>
-    </div>
-    <div class="card">
-      <h2>Build <span class="muted">(parts: <b id="parts">0</b>)</span></h2>
+  <!-- top centre: countdowns, drop-down warnings -->
+  <div class="topCenter">
+    <div id="countdowns" class="countdowns" aria-live="polite"></div>
+    <div id="banners" class="banners" aria-live="polite"></div>
+  </div>
+
+  <!-- left column: CAPCOM, why, mission log (collapsed = small buttons) -->
+  <div class="dock left">
+    <section class="panel capcom" id="capcom" data-panel="capcom">
+      <header data-toggle="capcom"><h2>📡 CAPCOM<span class="dot" aria-label="new message"></span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <div id="capcomText">Standing by.</div>
+    </section>
+    <section class="panel" data-panel="why">
+      <header data-toggle="why"><h2>❓ <span class="lbl">Why is this happening?</span><span class="short">Why?</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <div id="chains" class="chains"></div>
+    </section>
+    <section class="panel" data-panel="log">
+      <header data-toggle="log"><h2>📜 <span class="lbl">Mission log</span><span class="short">Log</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <ol id="log" class="log"></ol>
+    </section>
+  </div>
+
+  <!-- right column: build -->
+  <div class="dock right">
+    <section class="panel" data-panel="build">
+      <header data-toggle="build"><h2>🔨 Build <span class="muted">(parts: <b id="parts">0</b>)</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
       <div id="buildMenu" class="buildMenu"></div>
       <div class="actions">
         <button id="bermBtn" class="wide">⛰️ Shield habitat with moon dirt <small>(0 parts, 36 crew-hours)</small></button>
         <button id="shelterBtn" class="wide">🛡️ Send crew to shelter</button>
       </div>
       <div id="jobLine" class="muted small"></div>
-    </div>
-    <div class="card">
-      <h2>Why is this happening?</h2>
-      <div id="chains" class="chains"></div>
-    </div>
-    <div class="card">
-      <h2>Mission log</h2>
-      <ol id="log" class="log"></ol>
-    </div>
-  </aside>
+    </section>
+  </div>
+
+  <!-- bottom centre: supplies -->
+  <div class="dock bottom">
+    <div id="buildHint" class="buildHint" hidden></div>
+    <section class="panel" data-panel="supplies">
+      <header data-toggle="supplies"><h2>📊 Supplies</h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <div class="supGrid">
+        <div id="bars"></div>
+        <div class="bar powerCell">
+          <div class="barTop"><span>⚡ Power</span><span id="powerLine" class="val"></span></div>
+          <div id="powerBar" class="powerBar"><div class="make"></div><div class="use"></div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="mapHint">🖐️ Drag to look around · <b>H</b> = back to base</div>
 </main>
 
 <div id="modal" class="modal" hidden><div class="modalBox" role="dialog" aria-modal="true"><div id="modalBody"></div></div></div>

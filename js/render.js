@@ -1,23 +1,72 @@
 // Drawing the map. Runs every frame (60 fps). Reads the sim state, never changes it.
+// The world is bigger than the screen: a camera (cam.x, cam.y = top-left corner in world pixels)
+// picks which part we see. Drag the map to move the camera.
 (function (root) {
   'use strict';
   const MT = (root.MT = root.MT || {});
 
-  const POOL_SIZE = 260;
+  const POOL_SIZE = 300;
+  const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
 
   function Renderer(canvas, forecastCanvas) {
     const C = MT.CONFIG, T = C.map.tile;
-    const W = C.map.cols * T, H = C.map.rows * T;
-    canvas.width = W; canvas.height = H;
+    const W = C.map.cols * T, H = C.map.rows * T; // world size
+    let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
+    const safe = { left: 0, right: 0, top: 0, bottom: 0 }; // screen edges covered by open panels
     const ctx = canvas.getContext('2d');
     const fctx = forecastCanvas.getContext('2d');
 
     let ground = null, zonePaths = null;
-    const shade = { ridge: 0, plain: 0 };
     const crew = [];
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
-    let time = 0, dashOffset = 0;
+    let time = 0, dashOffset = 0, frac = 0;
+    const cam = { x: 0, y: 0, tx: 0, ty: 0, flying: false };
+    let tagRect = null; // where the "back to base" tag was drawn (canvas pixels), for clicks
+
+    // ---------- screen size ----------
+    // The canvas fills the window. We draw in CSS pixels and scale by the device pixel ratio so it stays sharp.
+    function resize(cssW, cssH) {
+      // keep the same spot of the Moon in the middle of the screen when the window changes size
+      const midX = cam.x + VW / 2, midY = cam.y + VH / 2;
+      VW = Math.max(200, Math.round(cssW)); VH = Math.max(200, Math.round(cssH));
+      cam.x = midX - VW / 2; cam.y = midY - VH / 2;
+      DPR = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(VW * DPR); canvas.height = Math.round(VH * DPR);
+      moveTo(cam.x, cam.y);
+    }
+    function setSafeArea(a) { Object.assign(safe, a); }
+
+    // ---------- camera ----------
+    const clampX = (x) => (W <= VW ? (W - VW) / 2 : Math.max(0, Math.min(W - VW, x))); // centre the world if the screen is bigger
+    const clampY = (y) => (H <= VH ? (H - VH) / 2 : Math.max(0, Math.min(H - VH, y)));
+    function moveTo(x, y) { cam.x = clampX(x); cam.y = clampY(y); cam.flying = false; }
+    function flyTo(x, y) { cam.tx = clampX(x); cam.ty = clampY(y); cam.flying = true; }
+    // Centre a world point in the part of the screen that is NOT covered by panels.
+    function centerOn(wx, wy, smooth) {
+      const sx = (safe.left + VW - safe.right) / 2, sy = (safe.top + VH - safe.bottom) / 2;
+      (smooth ? flyTo : moveTo)(wx - sx, wy - sy);
+    }
+    function centerOnBase(state, smooth) {
+      const hab = state.modules.find((m) => m.type === 'hab');
+      centerOn((hab.c + hab.w / 2) * T, (hab.r + hab.h / 2) * T, smooth);
+    }
+
+    // Mouse position → canvas pixels (the canvas is scaled by CSS) → world tile.
+    function toCanvas(evt) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: ((evt.clientX - rect.left) / rect.width) * VW, y: ((evt.clientY - rect.top) / rect.height) * VH, px: evt.clientX - rect.left, py: evt.clientY - rect.top, scale: VW / rect.width };
+    }
+    function tileAt(evt) {
+      const p = toCanvas(evt);
+      return { c: Math.floor((p.x + cam.x) / T), r: Math.floor((p.y + cam.y) / T), px: p.px, py: p.py };
+    }
+    function hitTag(evt) {
+      if (!tagRect) return false;
+      const p = toCanvas(evt);
+      const pad = 12; // easier to hit than the drawn tag
+      return p.x >= tagRect.x - pad && p.x <= tagRect.x + tagRect.w + pad && p.y >= tagRect.y - pad && p.y <= tagRect.y + tagRect.h + pad;
+    }
 
     // ---------- static ground, drawn once ----------
     function buildGround(state) {
@@ -28,19 +77,17 @@
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
       zonePaths = { ridge: new Path2D(), plain: new Path2D(), ice: new Path2D() };
       for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) {
-        const z = MT.Sim.zoneOf(state, c, r);
-        zonePaths[z].rect(c * T, r * T, T, T);
+        zonePaths[MT.Sim.zoneOf(state, c, r)].rect(c * T, r * T, T, T);
       }
       for (const z of ['plain', 'ridge', 'ice']) { g.fillStyle = C.zones[z].color; g.fill(zonePaths[z]); }
-      // speckle texture
-      for (let i = 0; i < 2600; i++) {
+      const area = (W * H) / (800 * 560);
+      for (let i = 0; i < 2600 * area; i++) {
         const x = rand() * W, y = rand() * H, s = rand() * 2 + 0.5;
         g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
         g.fillRect(x, y, s, s);
       }
-      // craters
-      for (let i = 0; i < 46; i++) {
-        const x = rand() * W, y = rand() * H, r = 4 + rand() ** 2 * 26;
+      for (let i = 0; i < 46 * area; i++) {
+        const x = rand() * W, y = rand() * H, r = 4 + rand() ** 2 * 30;
         g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
         g.fillStyle = 'rgba(0,0,0,0.13)'; g.fill();
         g.beginPath(); g.arc(x - r * 0.15, y - r * 0.15, r * 0.85, 0, Math.PI * 2);
@@ -48,26 +95,24 @@
         g.beginPath(); g.arc(x, y, r, Math.PI * 0.1, Math.PI * 0.9);
         g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1.5; g.stroke();
       }
-      // ice sparkles in the dark crater
       g.save(); g.clip(zonePaths.ice);
-      for (let i = 0; i < 260; i++) {
+      for (let i = 0; i < 260 * area; i++) {
         g.fillStyle = `rgba(170,210,255,${0.15 + rand() * 0.35})`;
         g.fillRect(rand() * W, rand() * H, 1.5, 1.5);
       }
       g.restore();
-      // ridge edge highlight
       g.strokeStyle = 'rgba(255,255,255,0.18)'; g.lineWidth = 2; g.stroke(zonePaths.ridge);
-      // grid
       g.strokeStyle = 'rgba(255,255,255,0.045)'; g.lineWidth = 1;
       for (let c = 0; c <= C.map.cols; c++) { g.beginPath(); g.moveTo(c * T + 0.5, 0); g.lineTo(c * T + 0.5, H); g.stroke(); }
       for (let r = 0; r <= C.map.rows; r++) { g.beginPath(); g.moveTo(0, r * T + 0.5); g.lineTo(W, r * T + 0.5); g.stroke(); }
-      // labels
-      g.font = 'bold 12px system-ui, sans-serif'; g.fillStyle = 'rgba(255,255,255,0.55)';
-      g.fillText('HIGH RIDGE', 8, 18);
-      g.fillStyle = 'rgba(170,210,255,0.7)';
-      g.fillText('SHADOWED CRATER (ICE)', 610, 470);
+      g.font = 'bold 13px system-ui, sans-serif'; g.textAlign = 'center';
+      for (const f of C.features) {
+        g.fillStyle = f.zone === 'ice' ? 'rgba(170,210,255,0.75)' : 'rgba(255,255,255,0.6)';
+        g.fillText(f.label, f.u * W, f.v * H);
+      }
       ground = off;
-      for (let i = 0; i < C.crew; i++) crew.push({ x: 0, y: 0, tx: 0, ty: 0, init: false });
+      crew.length = 0;
+      for (let i = 0; i < C.crew; i++) crew.push({ x: 0, y: 0, init: false });
     }
 
     // ---------- particles (object pool, no new objects per frame) ----------
@@ -77,11 +122,12 @@
     }
 
     const center = (m) => ({ x: (m.c + m.w / 2) * T, y: (m.r + m.h / 2) * T });
-    let frac = 0; // fraction of the current game hour, so the Sun glides instead of jumping each hour
+    // Direction the sunlight comes FROM (unit vector, screen coords). Smooth between game hours.
     const sunVec = (state) => {
       const a = (MT.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
       return { x: Math.cos(a), y: Math.sin(a) };
     };
+    const lightAt = (state, m) => MT.Sim.zoneLight(state, MT.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
 
     function hull(pts) {
       pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -91,6 +137,8 @@
       for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
       return lo.slice(0, -1).concat(up.slice(0, -1));
     }
+    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
     // ---------- module sprites ----------
     function drawModule(state, m, blink) {
@@ -101,8 +149,8 @@
       switch (m.type) {
         case 'hab': {
           if (state.berm.built || state.berm.building) {
-            const frac = state.berm.built ? 1 : state.berm.progress / C.bermWork;
-            ctx.beginPath(); ctx.arc(cx, cy, 38, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+            const f = state.berm.built ? 1 : state.berm.progress / C.bermWork;
+            ctx.beginPath(); ctx.arc(cx, cy, 38, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
             ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 9; ctx.stroke();
           }
           ctx.beginPath(); ctx.arc(cx, cy, 31, 0, Math.PI * 2);
@@ -118,16 +166,16 @@
           break;
         }
         case 'solar': {
+          const L = lightAt(state, m);
           ctx.fillStyle = '#555'; ctx.fillRect(cx - 3, cy - 3, 6, 6);
           const s = sunVec(state);
-          const ang = Math.atan2(s.y, s.x) + Math.PI / 2;
-          ctx.translate(cx, cy); ctx.rotate(ang);
-          ctx.fillStyle = m.lit ? '#2f6fd6' : '#1d2c48';
+          ctx.translate(cx, cy); ctx.rotate(Math.atan2(s.y, s.x) + Math.PI / 2); // panel turns to face the Sun
+          ctx.fillStyle = rgb(mix([29, 44, 72], [47, 111, 214], L));
           ctx.fillRect(-16, -5, 32, 10);
-          ctx.strokeStyle = m.lit ? '#9cc3ff' : '#3a4a66'; ctx.lineWidth = 1;
+          ctx.strokeStyle = rgb(mix([58, 74, 102], [156, 195, 255], L)); ctx.lineWidth = 1;
           for (let i = -16; i <= 16; i += 8) { ctx.beginPath(); ctx.moveTo(i, -5); ctx.lineTo(i, 5); ctx.stroke(); }
           ctx.strokeRect(-16, -5, 32, 10);
-          if (m.lit && m.built && m.on) { ctx.fillStyle = `rgba(255,255,255,${0.25 + 0.25 * Math.sin(time * 3 + m.id)})`; ctx.fillRect(-16, -5, 8, 10); }
+          if (L > 0.3 && m.built && m.on) { ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.25 * Math.sin(time * 3 + m.id)) * L})`; ctx.fillRect(-16, -5, 8, 10); }
           break;
         }
         case 'battery': {
@@ -176,7 +224,6 @@
       }
       ctx.restore();
 
-      // status badges
       if (!m.built) {
         const work = C.modules[m.type].work;
         ctx.strokeStyle = '#ffd36b'; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeRect(x + 1.5, y + 1.5, w - 3, h - 3); ctx.setLineDash([]);
@@ -195,37 +242,89 @@
       }
     }
 
+    // ---------- "back to base" tag on the edge of the view ----------
+    function drawBaseTag(hc) {
+      const sx = hc.x - cam.x, sy = hc.y - cam.y; // base position on screen
+      tagRect = null;
+      const L = safe.left, R = VW - safe.right, Tp = safe.top, B = VH - safe.bottom; // visible map area
+      if (sx > L + 30 && sx < R - 30 && sy > Tp + 30 && sy < B - 30) return; // base is visible
+      const ox = (L + R) / 2, oy = (Tp + B) / 2, dx = sx - ox, dy = sy - oy;
+      const mx = Math.max(10, (R - L) / 2 - 64), my = Math.max(10, (B - Tp) / 2 - 26);
+      const t = Math.min(mx / Math.max(1e-6, Math.abs(dx)), my / Math.max(1e-6, Math.abs(dy)));
+      const px = ox + dx * t, py = oy + dy * t;
+      const ang = Math.atan2(dy, dx);
+      const dist = Math.round((Math.hypot(sx - VW / 2, sy - VH / 2) / T) * METERS_PER_TILE / 10) * 10;
+      const pulse = 0.75 + 0.25 * Math.sin(time * 4);
+      ctx.save();
+      ctx.translate(px + Math.cos(ang) * 46, py + Math.sin(ang) * 20);
+      ctx.rotate(ang);
+      ctx.fillStyle = `rgba(255,211,107,${pulse})`;
+      ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-6, -9); ctx.lineTo(-6, 9); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      const w = 104, h = 36, x = px - w / 2, y = py - h / 2;
+      ctx.fillStyle = 'rgba(12,16,26,0.9)';
+      ctx.strokeStyle = `rgba(255,211,107,${pulse})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, 10); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('🏠 BASE', px, py - 2);
+      ctx.fillStyle = '#c9d1dc'; ctx.font = '10px system-ui';
+      ctx.fillText(`${dist} m · click`, px, py + 12);
+      tagRect = { x, y, w, h };
+    }
+
     // ---------- main draw ----------
     function draw(state, dt, ui) {
-      if (!ground) buildGround(state);
+      if (!ground) { buildGround(state); centerOnBase(state, false); }
       frac = ui.frac || 0;
       time += dt;
       dashOffset -= dt * 28;
+      if (cam.flying) {
+        const k = Math.min(1, dt * 6);
+        cam.x += (cam.tx - cam.x) * k; cam.y += (cam.ty - cam.y) * k;
+        if (Math.abs(cam.tx - cam.x) < 0.5 && Math.abs(cam.ty - cam.y) < 0.5) { cam.x = cam.tx; cam.y = cam.ty; cam.flying = false; }
+      }
       const blink = Math.floor(time * 2.5) % 2 === 0;
       const habM = state.modules.find((m) => m.type === 'hab');
       const hc = center(habM);
 
-      ctx.drawImage(ground, 0, 0);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.fillStyle = '#0b0e15'; ctx.fillRect(0, 0, VW, VH);
+      ctx.setTransform(DPR, 0, 0, DPR, -Math.round(cam.x) * DPR, -Math.round(cam.y) * DPR);
+      // only copy the part of the ground image the camera can see
+      const gx = Math.max(0, Math.floor(cam.x)), gy = Math.max(0, Math.floor(cam.y));
+      const gw = Math.min(W - gx, VW + 2), gh = Math.min(H - gy, VH + 2);
+      if (gw > 0 && gh > 0) ctx.drawImage(ground, gx, gy, gw, gh, gx, gy, gw, gh);
 
-      // zone shadows fade in/out smoothly
-      for (const z of ['ridge', 'plain']) {
-        const target = MT.Sim.zoneLitAt(state, z, state.hour) ? 0 : 0.72;
-        shade[z] += (target - shade[z]) * Math.min(1, dt * 2.5);
-        if (shade[z] > 0.01) { ctx.fillStyle = `rgba(5,8,20,${shade[z]})`; ctx.fill(zonePaths[z]); }
+      // Terrain shadow: each zone gets darker as the Sun slides behind the hills (smooth, follows game time).
+      // Only the tiles the camera can see are drawn, so a big map stays fast.
+      const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VW) / T));
+      const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VH) / T));
+      const shadeOf = {
+        ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
+        plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
+        ice: 0.35,
+      };
+      for (const z of ['ridge', 'plain', 'ice']) {
+        if (shadeOf[z] < 0.005) continue;
+        ctx.fillStyle = z === 'ice' ? 'rgba(5,8,25,0.35)' : `rgba(5,8,20,${shadeOf[z].toFixed(3)})`;
+        for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+          if (MT.Sim.zoneOf(state, c, r) === z) ctx.fillRect(c * T, r * T, T, T);
+        }
       }
-      ctx.fillStyle = 'rgba(5,8,25,0.35)'; ctx.fill(zonePaths.ice);
 
-      // long shadows from modules (the Sun is always near the horizon at the pole)
+      // Object shadows point AWAY from the Sun. The Sun is always low at the pole, so shadows are long;
+      // as the Sun sinks behind a hill they stretch and fade out.
       const sv = sunVec(state);
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
       for (const m of state.modules) {
-        if (!m.built || !MT.Sim.zoneLitAt(state, MT.Sim.zoneOf(state, m.c, m.r), state.hour)) continue;
+        if (!m.built) continue;
+        const L = lightAt(state, m);
+        if (L < 0.02) continue;
         const pad = m.type === 'hab' ? 10 : 8;
         const x0 = m.c * T + pad, y0 = m.r * T + pad, x1 = (m.c + m.w) * T - pad, y1 = (m.r + m.h) * T - pad;
-        const L = m.type === 'hab' ? 34 : m.type === 'solar' ? 30 : 16;
+        const len = (m.type === 'hab' ? 38 : m.type === 'solar' ? 32 : 18) * (1 + (1 - L) * 1.5);
         const pts = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
-        const all = pts.concat(pts.map(([px, py]) => [px - sv.x * L, py - sv.y * L]));
-        const hp = hull(all);
+        const hp = hull(pts.concat(pts.map(([px, py]) => [px - sv.x * len, py - sv.y * len])));
+        ctx.fillStyle = `rgba(0,0,0,${(0.28 * L).toFixed(3)})`;
         ctx.beginPath(); ctx.moveTo(hp[0][0], hp[0][1]);
         for (let i = 1; i < hp.length; i++) ctx.lineTo(hp[i][0], hp[i][1]);
         ctx.closePath(); ctx.fill();
@@ -237,7 +336,7 @@
         if (m.type === 'hab' || !m.built) continue;
         const c = center(m);
         let color, flow = 0;
-        if (m.type === 'solar') { color = m.lit && m.on ? '#ffd36b' : '#4a4f5a'; flow = m.lit && m.on ? 1 : 0; }
+        if (m.type === 'solar') { const on = m.light > 0.02 && m.on; color = on ? '#ffd36b' : '#4a4f5a'; flow = on ? 1 : 0; }
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
@@ -264,7 +363,7 @@
           tx = jc.x + (i ? 10 : -10) + Math.sin(time * 3 + i) * 3; ty = jc.y + 14;
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
-        const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 90 * dt;
+        const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
         if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; } else { a.x = tx; a.y = ty; }
         const outside = !(state.sheltering && shelter) && i < wOut;
         if (!outside && !(state.sheltering && shelter) && d < 1) return; // inside the habitat: hidden
@@ -273,13 +372,14 @@
         ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
       });
 
-      // radiation storm particles stream from the Sun's direction
+      // radiation storm particles stream in from the Sun's direction, across what the camera sees
       if (state.stormRate > 0.3) {
         const n = Math.min(6, state.stormRate * 0.6 + 0.5);
+        const vx = cam.x + VW / 2, vy = cam.y + VH / 2;
         for (let k = 0; k < n; k++) {
           if (Math.random() > 0.5) continue;
-          const perp = (Math.random() - 0.5) * 1.6 * W;
-          const sx = W / 2 + sv.x * W * 0.65 - sv.y * perp, sy = H / 2 + sv.y * W * 0.65 + sv.x * perp;
+          const perp = (Math.random() - 0.5) * 1.6 * VW;
+          const sx = vx + sv.x * VW * 0.65 - sv.y * perp, sy = vy + sv.y * VW * 0.65 + sv.x * perp;
           const sp = 500 + Math.random() * 300;
           spawn(0, sx, sy, -sv.x * sp, -sv.y * sp, 2.2, Math.random() < 0.5 ? 'rgba(255,90,90,0.7)' : 'rgba(255,220,120,0.7)');
         }
@@ -298,21 +398,9 @@
           ctx.globalAlpha = 1;
         }
       }
-      if (state.stormRate > 0.3) { ctx.fillStyle = `rgba(255,40,40,${Math.min(0.14, state.stormRate * 0.01)})`; ctx.fillRect(0, 0, W, H); }
-
-      // the Sun on the horizon
-      const R = Math.min(W, H) / 2 - 16;
-      const sx = W / 2 + sv.x * (W / 2 - 18), sy = H / 2 + sv.y * (H / 2 - 18);
-      const grad = ctx.createRadialGradient(sx, sy, 2, sx, sy, 34);
-      grad.addColorStop(0, 'rgba(255,240,180,1)'); grad.addColorStop(0.3, 'rgba(255,210,90,0.6)'); grad.addColorStop(1, 'rgba(255,200,80,0)');
-      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(sx, sy, 34, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#fff6d0'; ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(255,240,200,0.9)'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
-      ctx.fillText('SUN', sx - sv.x * 22, sy - sv.y * 22 + 3);
-      void R;
 
       // hover / build ghost
-      if (ui.hover) {
+      if (ui.hover && !ui.dragging) {
         const { c, r } = ui.hover;
         if (ui.buildType) {
           const d = C.modules[ui.buildType];
@@ -328,45 +416,56 @@
           else ctx.strokeRect(c * T + 1, r * T + 1, T - 2, T - 2);
         }
       }
+
+      // screen-space overlays
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      if (state.stormRate > 0.3) { ctx.fillStyle = `rgba(255,40,40,${Math.min(0.14, state.stormRate * 0.01)})`; ctx.fillRect(0, 0, VW, VH); }
+      drawBaseTag(hc);
     }
 
     // ---------- sunlight forecast strip (redrawn once per game hour) ----------
+    // Slim version that lives in the top bar: two 11-px rows + day labels, 40 px tall in total.
     function drawForecast(state) {
-      const cw = forecastCanvas.width, ch = forecastCanvas.height, left = 74, w = cw - left - 6, total = C.missionHours;
+      const cw = forecastCanvas.width, ch = forecastCanvas.height, left = 70, w = cw - left - 8, total = C.missionHours;
       fctx.clearRect(0, 0, cw, ch);
-      const rows = [['ridge', 'High ridge'], ['plain', 'Plain']];
+      const rows = [['ridge', 'High ground'], ['plain', 'Plain']];
+      const dark = [44, 52, 69], sun = [255, 211, 107];
+      const rowH = 11, top = 2, gap = 2;
       rows.forEach(([z, label], i) => {
-        const y = 4 + i * 18;
-        fctx.fillStyle = '#c9d1dc'; fctx.font = '11px system-ui'; fctx.textAlign = 'left'; fctx.fillText(label, 4, y + 11);
-        const L = state.light[z];
+        const y = top + i * (rowH + gap);
+        fctx.fillStyle = '#c9d1dc'; fctx.font = '10px system-ui'; fctx.textAlign = 'left'; fctx.fillText(label, 2, y + 9);
         for (let h = 0; h < total; h++) {
-          fctx.fillStyle = L[h] ? (h < state.hour ? '#8a7a3a' : '#ffd36b') : (h < state.hour ? '#1b1f2a' : '#2c3445');
-          fctx.fillRect(left + (h / total) * w, y, w / total + 0.6, 14);
+          let c = mix(dark, sun, MT.Sim.zoneLight(state, z, h + 0.5));
+          if (h < state.hour) c = mix(c, [16, 20, 28], 0.5); // the past is dimmed
+          fctx.fillStyle = rgb(c);
+          fctx.fillRect(left + (h / total) * w, y, w / total + 0.6, rowH);
         }
       });
-      // day ticks
+      const rowsBottom = top + 2 * rowH + gap;
       fctx.fillStyle = '#8b93a1'; fctx.font = '9px system-ui'; fctx.textAlign = 'center';
-      for (let d = 0; d <= 30; d += 5) { const x = left + ((d * 24) / total) * w; fctx.fillRect(x, 40, 1, 4); fctx.fillText(d ? 'Day ' + d : '', x, 53); }
-      // storms already seen
+      for (let d = 0; d <= 30; d += 5) {
+        const x = left + ((d * 24) / total) * w;
+        fctx.fillRect(x, rowsBottom + 1, 1, 3);
+        if (d) fctx.fillText('Day ' + d, Math.min(x, cw - 18), ch - 3);
+      }
       for (const s of state.storms) if (s.warned) {
         const x = left + (s.h / total) * w;
-        fctx.fillStyle = '#ff5d5d'; fctx.fillRect(x - 1, 2, 2, 36);
+        fctx.fillStyle = '#ff5d5d'; fctx.fillRect(x - 1, top, 2, rowsBottom - top);
       }
-      // now marker
       const nx = left + (state.hour / total) * w;
-      fctx.fillStyle = '#ffffff'; fctx.beginPath(); fctx.moveTo(nx, 38); fctx.lineTo(nx - 5, 46); fctx.lineTo(nx + 5, 46); fctx.fill();
-      fctx.fillRect(nx - 0.5, 2, 1, 36);
+      fctx.fillStyle = '#ffffff';
+      fctx.fillRect(nx - 0.5, top, 1.5, rowsBottom - top);
+      fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
     }
 
-    function tileAt(evt) {
-      const rect = canvas.getBoundingClientRect();
-      const x = ((evt.clientX - rect.left) / rect.width) * W, y = ((evt.clientY - rect.top) / rect.height) * H;
-      return { c: Math.floor(x / T), r: Math.floor(y / T), px: evt.clientX - rect.left, py: evt.clientY - rect.top };
-    }
+    function reset() { ground = null; tagRect = null; for (const p of pool) p.alive = false; }
 
-    function reset() { ground = null; crew.length = 0; shade.ridge = shade.plain = 0; for (const p of pool) p.alive = false; }
-
-    return { draw, drawForecast, tileAt, reset };
+    return {
+      draw, drawForecast, tileAt, toCanvas, hitTag, reset, centerOnBase, resize, setSafeArea,
+      panStart: () => ({ x: cam.x, y: cam.y }),
+      debug: () => ({ cam: { ...cam }, tag: tagRect, view: [VW, VH], world: [W, H] }),
+      panTo: (x, y) => moveTo(x, y),
+    };
   }
 
   MT.Renderer = Renderer;

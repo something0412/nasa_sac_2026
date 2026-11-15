@@ -31,6 +31,7 @@
       tileAt: (e) => cur().tileAt(e),
       toCanvas: (e) => cur().toCanvas(e),
       hitTag: (e) => cur().hitTag(e),
+      crewAt: (e) => (cur().crewAt ? cur().crewAt(e) : null), // the astronaut under the mouse (click to pick them)
       centerOnBase: (state, smooth) => cur().centerOnBase(state, smooth),
       panStart: () => cur().panStart(),
       panTo: (x, y) => cur().panTo(x, y),

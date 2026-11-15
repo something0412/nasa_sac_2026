@@ -22,12 +22,22 @@
   function sunAz(state, h) {
     return (((state.sunStartAz + cfg().sun.degPerHour * h) % 360) + 360) % 360;
   }
-  function zoneLitAt(state, zone, h) {
+  // How much sunlight reaches a zone, 0 (full shadow) .. 1 (full Sun).
+  // Near the edge of a shadow arc the Sun is partly behind the hill, so light fades smoothly.
+  const angDist = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+  function zoneLight(state, zone, h) {
     const z = cfg().zones[zone];
-    if (z.alwaysDark) return false;
-    const az = sunAz(state, h);
-    return !z.shadowArcs.some(([a, b]) => az >= a && az < b);
+    if (z.alwaysDark) return 0;
+    const az = sunAz(state, h), F = cfg().sun.fadeDeg;
+    let light = 1;
+    for (const [a, b] of z.shadowArcs) {
+      const inside = az >= a && az < b;
+      const d = inside ? Math.min(az - a, b - az) : -Math.min(angDist(az, a), angDist(az, b)); // + inside, - outside
+      light = Math.min(light, clamp(0.5 - d / (2 * F), 0, 1));
+    }
+    return light;
   }
+  const zoneLitAt = (state, zone, h) => zoneLight(state, zone, h) > 0.5;
 
   // ---------- scenarios ----------
   // Real radiation measured by NASA's LRO (data/radlab.js), or null if that file is missing.
@@ -139,12 +149,13 @@
     }
 
     // Starting base (already built).
-    addModule(state, 'hab', 8, 6, true);
-    addModule(state, 'solar', 6, 6, true);
-    addModule(state, 'solar', 6, 7, true);
-    addModule(state, 'battery', 11, 6, true);
-    addModule(state, 'o2gen', 11, 7, true);
-    addModule(state, 'greenhouse', 8, 9, true);
+    const B = C.base;
+    addModule(state, 'hab', B.c, B.r, true);
+    addModule(state, 'solar', B.c - 2, B.r, true);
+    addModule(state, 'solar', B.c - 2, B.r + 1, true);
+    addModule(state, 'battery', B.c + 3, B.r, true);
+    addModule(state, 'o2gen', B.c + 3, B.r + 1, true);
+    addModule(state, 'greenhouse', B.c, B.r + 3, true);
     state.res.battery = Math.min(state.res.battery, batteryCap(state));
     updatePower(state, 0, true);
     return state;
@@ -262,9 +273,10 @@
     const C = cfg();
     let supply = 0;
     for (const m of built(state, 'solar')) {
-      m.lit = zoneLitAt(state, zoneOf(state, m.c, m.r), h + 0.5);
-      m.powered = m.lit;
-      if (m.lit && m.on) supply += C.modules.solar.makes;
+      m.light = zoneLight(state, zoneOf(state, m.c, m.r), h + 0.5);
+      m.lit = m.light > 0.5;
+      m.powered = m.light > 0.02;
+      if (m.on) supply += C.modules.solar.makes * m.light; // half-covered Sun = half power
     }
     for (const m of built(state, 'battery')) m.powered = true;
     const consumers = built(state).filter((m) => needOf(state, m) > 0).sort((a, b) => (C.modules[a.type].priority - C.modules[b.type].priority) || a.id - b.id);
@@ -321,7 +333,7 @@
       let len = 0; while (start + len < L.length && !L[start + len]) len++;
       const inH = start - h;
       say('warn', `Forecast: shadow coming to the ${C.zones[z].name.toLowerCase()}`,
-        `In ${inH} hours the Sun goes behind the hills for about ${round1(len / 24)} days. ${panels} of your panels will stop making power. Charge batteries, save power, or build panels where the Sun still shines.`, { pause: true });
+        `In ${inH} hours the Sun goes behind the hills for about ${round1(len / 24)} days. ${panels} of your panels will stop making power. Charge batteries, save power, or build panels where the Sun still shines.`, { banner: true });
     }
 
     // Space weather.
@@ -337,10 +349,10 @@
       if (!s.warned && h + 1 >= s.h - C.rad.warnLead) { // +1: the clock shows hour h+1 right after this step
         s.warned = true;
         say('bad', s.strong ? '☢️ STRONG radiation storm incoming!' : '☢️ Radiation storm incoming',
-          (hasShelter(state) ? 'Particles arrive in about 2 hours. Move the crew to the Storm Shelter?' : 'Particles arrive in about 2 hours. You have NO storm shelter. Crew inside the habitat get half the radiation; crew outside get all of it.') +
+          (hasShelter(state) ? 'Particles arrive in about 2 hours.' : 'Particles arrive in about 2 hours. You have NO storm shelter.') +
           (s.date ? ` (Real event: ${s.date.slice(0, 16).replace('T', ' ')} UTC)` : '') +
-          (s.realName ? ` This storm copies the real ${s.realName}, measured by NASA's Lunar Reconnaissance Orbiter.` : ''),
-          { pause: true, decision: hasShelter(state) ? 'shelter' : null });
+          (s.realName ? ` This storm copies the real ${s.realName}, measured by NASA's Lunar Reconnaissance Orbiter.` : ''));
+        // No pop-up and no pause on purpose: players must notice the countdown bar / CAPCOM themselves.
       }
     }
     const S = stormRateAt(state, h + 0.5);
@@ -352,9 +364,8 @@
     const justWarned = state.storms.some((s) => s.warned && h - (s.h - C.rad.warnLead) < 6);
     if (!stormWasOn && S > C.rad.stormOn && !justWarned && !state.sheltering) {
       say('bad', '☢️ Radiation is rising again!',
-        hasShelter(state) ? 'Another wave of solar particles is arriving. Move the crew back into the Storm Shelter?'
-          : 'Another wave of solar particles is arriving. Stop work outside; the habitat blocks half of it.',
-        { pause: true, decision: hasShelter(state) ? 'shelter' : null });
+        hasShelter(state) ? 'Another wave of solar particles is arriving.'
+          : 'Another wave of solar particles is arriving. Stop work outside; the habitat blocks half of it.'); // CAPCOM only, no pop-up
     }
 
     // Construction.
@@ -442,7 +453,7 @@
     const w = wOut;
     const add = { background: ((n - w) * inF * bg) / n, storm: ((n - w) * inF * S) / n, outside: (w * (bg + S)) / n };
     for (const k in add) { state.doseFrom[k] += add[k]; state.dose += add[k]; }
-    if (S > 0.3 && w > 0 && !state.warned['eva' + Math.floor(h / 6)]) {
+    if (S > C.rad.stormOn && w > 0 && !state.warned['eva' + Math.floor(h / 6)]) {
       state.warned['eva' + Math.floor(h / 6)] = true;
       say('bad', 'Astronauts are OUTSIDE during a radiation storm!', 'They are building right now and getting the full dose. Pause building or use the shelter.');
     }
@@ -452,7 +463,7 @@
     state.cargo.forEach((k, i) => {
       if (!k.asked && h >= k.h - C.cargoAskLead) {
         k.asked = true;
-        say('info', `Cargo lander #${i + 1} launches soon`, 'It lands in 2 days. What should it carry?', { pause: true, decision: 'cargo', cargoIndex: i });
+        say('info', `Cargo lander #${i + 1} launches soon`, 'It lands in 2 days. What should it carry?', { banner: true, decision: 'cargo', cargoIndex: i });
       }
       if (!k.arrived && h >= k.h) {
         k.arrived = true;
@@ -549,7 +560,7 @@
         powerStory();
         add(startOf('nopower_hab'), 'With no power left, the heaters stopped.');
         add(t, `The habitat cooled below ${C.habTemp.fail} °C. The crew had to leave.`);
-        if (!ridgePanels) out.tips.push('Build solar panels on the HIGH RIDGE (light gray, top-left). It stays sunny much longer.');
+        if (!ridgePanels) out.tips.push('Build solar panels on HIGH GROUND (the light gray hills and ridges). It stays sunny much longer. Drag the map to find them.');
         out.tips.push('Check the sunlight forecast under the map. Before a long shadow, fill the batteries and build more of them.');
         out.tips.push('Turn off greenhouses during the dark. The crew can eat stored food for a few days.');
         out.fact = 'NASA picked the lunar south pole partly because some ridges there are sunlit most of the time. Engineers study light maps from the Lunar Reconnaissance Orbiter to choose where to put solar panels.';
@@ -560,7 +571,7 @@
         add(startOf('noO2Make'), 'The O₂ Generator stopped making oxygen.');
         add(t, 'The oxygen tank reached zero.');
         out.tips.push('The O₂ Generator needs BOTH power and water. Watch both bars.');
-        if (!built(state, 'drill').length) out.tips.push('Build an Ice Drill in the dark crater (bottom-right). Ice → water → oxygen.');
+        if (!built(state, 'drill').length) out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one). Ice → water → oxygen.');
         out.tips.push('Choose "Water & air" cargo if oxygen is getting low.');
         out.fact = 'On the ISS, the Oxygen Generation System makes oxygen by splitting water with electricity, the same idea as in this game. A Moon base could get that water from ice in permanently shadowed craters.';
       } else if (cause === 'radiation') {
@@ -593,7 +604,7 @@
         add(null, `The O₂ Generator used ${Math.round(state.stats.o2Made * C.modules.o2gen.waterPerH / C.modules.o2gen.o2PerH)} kg of water to make air. The crew and greenhouses used more.`);
         add(startOf('waterEmpty'), 'The water tank ran dry.');
         add(t, 'After 2 days without water, the mission had to end.');
-        out.tips.push('Build an Ice Drill in the dark crater (bottom-right) and give it power.');
+        out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one) and give it power.');
         out.fact = 'NASA\'s LCROSS mission crashed into a dark crater near the lunar south pole in 2009 and found water ice in the debris cloud.';
       }
     } else {
@@ -625,10 +636,10 @@
           label: `${s.strong ? 'STRONG radiation storm' : 'Radiation storm'} arrives in` });
       }
     }
-    if (state.stormRate > 0.3) {
+    if (state.stormRate > cfg().rad.stormOn) {
       // Look ahead to when all storms fade below the "active" level.
       let end = Math.floor(now);
-      while (end < now + 120 && stormRateAt(state, end + 0.5) > 0.3) end++;
+      while (end < now + 120 && stormRateAt(state, end + 0.5) > cfg().rad.stormOn) end++;
       const started = Math.min(...state.storms.filter((s) => s.h <= now && stormRateAt(state, now) > 0).map((s) => s.h));
       out.push({ kind: 'stormActive', icon: '☢️', level: 'bad', left: Math.max(0, end - now), total: Math.max(1, end - started),
         label: state.sheltering ? 'Storm active (crew sheltered) · ends in about' : 'Storm active · ends in about' });
@@ -648,6 +659,6 @@
   MT.Sim = {
     upcoming, stormRateAt,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo,
-    causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLitAt, currentJob, workersOutside, hasShelter, firstTower, batteryCap, needOf, built, fmtDay, day,
+    causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, currentJob, workersOutside, hasShelter, firstTower, batteryCap, needOf, built, fmtDay, day,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

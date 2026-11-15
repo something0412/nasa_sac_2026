@@ -22,14 +22,31 @@ function play(scenario, seed, setup, each) {
   return st;
 }
 
-const goodSetup = (st) => {
-  for (const [t, c, r] of [['solar', 1, 1], ['solar', 2, 1], ['solar', 3, 0], ['battery', 12, 6], ['battery', 12, 7], ['shelter', 10, 9], ['drill', 15, 9]]) {
-    assert.ok(S.place(st, t, c, r).ok, `place ${t}`);
+// Nearest free tile of a zone, measured from the habitat (so tests survive map changes).
+function freeTile(st, zone, type) {
+  const C = globalThis.MT.CONFIG, B = C.base;
+  let best = null;
+  for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) {
+    if (S.zoneOf(st, c, r) !== zone || !S.canPlace(st, type, c, r).ok) continue;
+    const d = Math.hypot(c - B.c, r - B.r);
+    if (!best || d < best.d) best = { c, r, d };
   }
+  assert.ok(best, 'no free ' + zone + ' tile for ' + type);
+  return best;
+}
+function build(st, type, zone) { const t = freeTile(st, zone, type); assert.ok(S.place(st, type, t.c, t.r).ok, 'place ' + type); }
+
+const goodSetup = (st) => {
+  build(st, 'solar', 'ridge'); build(st, 'solar', 'ridge'); build(st, 'solar', 'ridge');
+  build(st, 'battery', 'plain'); build(st, 'battery', 'plain');
+  build(st, 'shelter', 'plain'); build(st, 'drill', 'ice');
 };
 const shelterBot = (st, ev) => {
-  for (const e of ev) if (e.decision === 'shelter') S.setShelter(st, true);
-  if (st.sheltering && st.stormRate < globalThis.MT.CONFIG.rad.stormOn && !st.storms.some((s) => s.h > st.hour - 3 && s.h < st.hour + 3)) S.setShelter(st, false);
+  // Like an alert player: watches the countdown bar (and the red "storm active" bar) and shelters.
+  const on = globalThis.MT.CONFIG.rad.stormOn;
+  const coming = S.upcoming(st, st.hour).some((i) => i.kind === 'storm') || st.stormRate > on;
+  if (coming && S.hasShelter(st)) S.setShelter(st, true);
+  if (st.sheltering && st.stormRate < on && !st.storms.some((s) => s.h > st.hour - 3 && s.h < st.hour + 3)) S.setShelter(st, false);
 };
 
 test('real May 2024 data is loaded and lines up with the mission', () => {
@@ -48,7 +65,7 @@ test('doing nothing fails in the first long shadow (habitat gets cold)', () => {
 });
 
 test('no ice drill → runs out of water', () => {
-  const st = play('history', 1, (s) => { S.place(s, 'solar', 1, 1); S.place(s, 'solar', 2, 1); S.place(s, 'battery', 12, 6); S.place(s, 'battery', 12, 7); });
+  const st = play('history', 1, (s) => { build(s, 'solar', 'ridge'); build(s, 'solar', 'ridge'); build(s, 'battery', 'plain'); build(s, 'battery', 'plain'); });
   assert.strictEqual(st.failure && st.failure.cause, 'water');
 });
 
@@ -110,8 +127,20 @@ test('countdown bar: cargo always shown, storm only after its warning', () => {
   const s = S.upcoming(st, st.hour).find((i) => i.kind === 'storm');
   assert.ok(s, 'storm countdown appears after the warning');
   assert.ok(s.left > 1 && s.left <= 2, 'countdown should start near 2 h, got ' + s.left);
-  while (st.hour < Math.ceil(storm.h) + 3) S.step(st);
-  assert.ok(S.upcoming(st, st.hour).some((i) => i.kind === 'stormActive'), 'active storm shows when it ends');
+  // With real LRO data the dose doesn't rise exactly at the DONKI alert time, so wait until it really does.
+  const on = globalThis.MT.CONFIG.rad.stormOn;
+  let guard = 0;
+  while (st.stormRate <= on && st.status === 'running' && guard++ < 200) S.step(st);
+  assert.ok(st.stormRate > on, 'a radiation storm actually arrives');
+  const active = S.upcoming(st, st.hour).find((i) => i.kind === 'stormActive');
+  assert.ok(active && active.left > 0, 'active storm shows when it ends');
+});
+
+test('radiation storm warnings do not pause the game or open a pop-up', () => {
+  const evs = [];
+  play('history', 1, goodSetup, (s, ev) => evs.push(...ev.filter((e) => /radiation (storm incoming|is rising again)/i.test(e.title))));
+  assert.strictEqual(evs.filter((e) => /incoming/i.test(e.title)).length, 4, 'one CAPCOM message per storm');
+  assert.ok(evs.every((e) => !e.pause && !e.banner && !e.decision), 'no pop-up, no pause, no banner for radiation');
 });
 
 test('Astronomy Tower: buildable anywhere, uses no power, cannot be switched off', () => {
@@ -176,11 +205,23 @@ test('archive picture: random week between 1995-06-16 and the day before today, 
 
 test('building rules', () => {
   const st = S.create({ scenario: 'training', seed: 2 });
-  assert.strictEqual(S.canPlace(st, 'drill', 1, 1).ok, false, 'drill only on ice');
-  assert.strictEqual(S.canPlace(st, 'drill', 16, 10).ok, true);
-  assert.strictEqual(S.canPlace(st, 'solar', 8, 6).ok, false, 'not on top of the habitat');
+  const ridge = freeTile(st, 'ridge', 'solar'), ice = freeTile(st, 'ice', 'drill');
+  assert.strictEqual(S.canPlace(st, 'drill', ridge.c, ridge.r).ok, false, 'drill only on ice');
+  assert.strictEqual(S.canPlace(st, 'drill', ice.c, ice.r).ok, true);
+  const B = globalThis.MT.CONFIG.base;
+  assert.strictEqual(S.canPlace(st, 'solar', B.c + 1, B.r + 1).ok, false, 'not on top of the habitat');
+  assert.strictEqual(S.canPlace(st, 'solar', -1, 0).ok, false, 'not outside the map');
   const before = st.res.parts;
-  const r = S.place(st, 'solar', 3, 3);
+  const r = S.place(st, 'solar', ridge.c, ridge.r);
   assert.ok(S.cancel(st, r.m.id));
   assert.strictEqual(st.res.parts, before, 'cancel refunds parts');
+});
+
+test('light fades gradually and solar power follows it', () => {
+  const st = S.create({ scenario: 'history', seed: 1 });
+  const vals = [];
+  for (let h = 160; h <= 200; h++) vals.push(S.zoneLight(st, 'plain', h));
+  assert.ok(vals.some((v) => v > 0.2 && v < 0.8), 'there are in-between light levels');
+  for (let i = 1; i < vals.length; i++) assert.ok(Math.abs(vals[i] - vals[i - 1]) < 0.15, 'no sudden jump at hour ' + (160 + i));
+  assert.strictEqual(S.zoneLight(st, 'ice', 100), 0, 'ice crater never sees the Sun');
 });

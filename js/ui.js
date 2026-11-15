@@ -24,11 +24,44 @@
     });
     function select(type) {
       selected = type;
+      $('map').classList.toggle('building', !!type);
       for (const b of menu.children) b.classList.toggle('sel', b.dataset.type === type);
       const hint = $('buildHint');
       if (type) { hint.hidden = false; hint.textContent = `Click the map to build: ${C.modules[type].name}. ${C.modules[type].desc}  (Esc to cancel)`; }
       else hint.hidden = true;
     }
+    // ----- floating panels: collapse to just their title bar, or expand (remembered in this browser) -----
+    const PANELS = ['supplies', 'build', 'why', 'capcom', 'log'];
+    const STORE_KEY = 'mt.panels.v3'; // v3: CAPCOM / Why? / Log start as small buttons
+    let open = {};
+    try { open = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) { open = {}; }
+    const small = window.innerWidth < 980;
+    for (const p of PANELS) if (typeof open[p] !== 'boolean') open[p] = p === 'supplies' || (p === 'build' && !small);
+    function applyPanels() {
+      for (const p of PANELS) {
+        const el = document.querySelector(`.panel[data-panel="${p}"]`);
+        if (!el) continue;
+        el.classList.toggle('collapsed', !open[p]);
+        if (open[p]) el.classList.remove('unread');
+        const head = el.querySelector(':scope > header');
+        head.setAttribute('aria-expanded', open[p]);
+        const btn = head.querySelector('.pClose');
+        btn.textContent = open[p] ? '–' : '+';
+        btn.title = open[p] ? 'Collapse' : 'Expand';
+      }
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(open)); } catch (e) { /* private mode: fine */ }
+      if (handlers.panels) handlers.panels();
+    }
+    function togglePanel(p) { if (!(p in open)) return; open[p] = !open[p]; if (p === 'build' && !open[p]) select(null); applyPanels(); }
+    // Click anywhere on a panel's title bar to collapse/expand it.
+    document.querySelectorAll('.panel > header[data-toggle]').forEach((h) => {
+      h.tabIndex = 0;
+      h.setAttribute('role', 'button');
+      h.addEventListener('click', () => togglePanel(h.dataset.toggle));
+      h.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); togglePanel(h.dataset.toggle); } });
+    });
+    applyPanels();
+
     $('bermBtn').addEventListener('click', handlers.berm);
     $('shelterBtn').addEventListener('click', handlers.shelter);
     document.querySelectorAll('.speed button').forEach((b) => b.addEventListener('click', () => handlers.speed(+b.dataset.speed)));
@@ -39,7 +72,7 @@
       { key: 'food', label: '🍞 Food', unit: 'kg', max: () => 150, perH: () => C.use.foodPerPersonH * C.crew },
       { key: 'water', label: '💧 Water', unit: 'kg', max: () => C.caps.water, perH: null },
       { key: 'battery', label: '🔋 Battery', unit: 'kWh', max: (s) => Math.max(1, s.power.cap), perH: null },
-      { key: 'dose', label: '☢️ Crew radiation', unit: 'mSv', max: () => C.rad.limit, bad: true },
+      { key: 'dose', label: '☢️ Radiation', unit: 'mSv', max: () => C.rad.limit, bad: true },
       { key: 'temp', label: '🌡️ Habitat', unit: '°C', max: () => C.habTemp.normal },
     ];
     const bars = $('bars');
@@ -65,7 +98,7 @@
         else {
           v = state.res[b.key]; frac = v / b.max(state);
           text = `${Math.round(v)} ${b.unit}`;
-          if (b.perH) { const d = v / b.perH() / 24; text += ` · ${r1(d)} days`; level = d < 2 ? 'bad' : d < 4 ? 'warn' : 'ok'; }
+          if (b.perH) { const d = v / b.perH() / 24; text += ` · ${r1(d)} d`; level = d < 2 ? 'bad' : d < 4 ? 'warn' : 'ok'; }
           else level = frac < 0.15 ? 'bad' : frac < 0.35 ? 'warn' : 'ok';
         }
         b.val.textContent = text;
@@ -74,12 +107,14 @@
       }
 
       const P = state.power;
-      $('powerLine').textContent = `making ${r1(P.supply)} kW · using ${r1(P.use)} kW`;
+      $('powerLine').textContent = `${r1(P.supply)} / ${r1(P.use)} kW`;
+      $('powerLine').title = `Solar is making ${r1(P.supply)} kW, the base is using ${r1(P.use)} kW`;
       const maxP = Math.max(P.supply, P.use, 1);
       $('powerBar').querySelector('.make').style.width = (P.supply / maxP) * 100 + '%';
       $('powerBar').querySelector('.use').style.width = (P.use / maxP) * 100 + '%';
       $('powerBar').dataset.level = P.use > P.supply + 0.01 ? (state.res.battery > 0.01 ? 'warn' : 'bad') : 'ok';
 
+      syncBanners(state);
       $('parts').textContent = state.res.parts;
       for (const b of menu.children) b.disabled = state.res.parts < C.modules[b.dataset.type].cost || state.status !== 'running';
       if (selected && state.res.parts < C.modules[selected].cost) select(null);
@@ -121,6 +156,7 @@
       $('capcomText').textContent = ev.title + (ev.text ? ' — ' + ev.text : '');
       const el = $('capcom');
       el.dataset.level = ev.level;
+      if (el.classList.contains('collapsed')) el.classList.add('unread'); // show a dot on the CAPCOM button
       el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
     }
 
@@ -137,7 +173,10 @@
         const lines = [];
         if (!m.built) lines.push(`Being built: ${Math.round((m.progress / d.work) * 100)}%`, '<i>Click to cancel (get parts back)</i>');
         else {
-          if (m.type === 'solar') lines.push(m.lit ? `☀️ In sunlight: making ${d.makes} kW` : '🌑 In shadow: making 0 kW');
+          if (m.type === 'solar') {
+            const L = m.light || 0, kw = r1(m.on ? d.makes * L : 0);
+            lines.push(L > 0.98 ? `☀️ Full sunlight: making ${kw} kW` : L > 0.02 ? `🌗 Sun going behind a hill (${Math.round(L * 100)}%): making ${kw} kW` : '🌑 In shadow: making 0 kW');
+          }
           else if (m.type === 'battery') lines.push(`Base battery: ${Math.round(state.res.battery)} / ${state.power.cap} kWh`);
           else if (m.type === 'shelter') lines.push(state.sheltering ? 'Crew is inside' : 'Empty. Use it during radiation storms.');
           else if (m.type === 'tower') lines.push(MT.Sim.firstTower(state) === m ? "<i>Click to see today's picture from NASA</i>" : "<i>Click to see a picture from NASA's archive (since 1995)</i>");
@@ -216,21 +255,44 @@
       $('modalBody').querySelectorAll('[data-a=close]').forEach((b) => b.addEventListener('click', close));
     }
 
-    function showEvent(ev, state, onClose) {
-      const C2 = C.cargoOptions;
-      let body = `<h2 class="${ev.level}">${esc(ev.title)}</h2><p>${esc(ev.text || '')}</p>`;
-      if (ev.decision === 'cargo') {
-        body += '<div class="choices three">' + Object.keys(C2).map((k) => `<button class="choice" data-c="${k}"><span class="big">${C2[k].icon}</span><b>${esc(C2[k].name)}</b><span>${esc(C2[k].text)}</span></button>`).join('') + '</div>';
-      } else if (ev.decision === 'shelter') {
-        body += '<div class="row"><button class="primary" data-a="shelter">🛡️ Go to the shelter</button><button data-a="stay">Keep working</button></div>';
-      } else body += '<div class="row"><button class="primary" data-a="ok">OK</button></div>';
-      modal(body);
-      $('modalBody').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-        if (b.dataset.c) handlers.cargo(ev.cargoIndex, b.dataset.c);
-        if (b.dataset.a === 'shelter') handlers.setShelter(true);
-        closeModal(); onClose();
-      }));
+    // ----- drop-down banners on the map (the game keeps running; no "OK" needed) -----
+    const BANNER_MS = 10000; // plain warnings slide away after 10 real seconds
+    const MAX_BANNERS = 3;
+    function closeBanner(el) {
+      if (!el || el.classList.contains('closing')) return;
+      el.classList.add('closing');
+      setTimeout(() => el.remove(), 300);
     }
+    function banner(ev) {
+      const box = $('banners');
+      const el = document.createElement('div');
+      el.className = `banner ${ev.level}`;
+      let html = `<button class="bClose" aria-label="Close">✕</button><b>${esc(ev.title)}</b><div class="bText">${esc(ev.text || '')}</div>`;
+      if (ev.decision === 'cargo') {
+        el.dataset.cargo = ev.cargoIndex;
+        const C2 = C.cargoOptions;
+        html += '<div class="bChoices">' + Object.keys(C2).map((k) => `<button data-c="${k}">${C2[k].icon} ${esc(C2[k].name)}<small>${esc(C2[k].text)}</small></button>`).join('') + '</div>' +
+          '<div class="bNote">If you don\'t choose, Mission Control sends food.</div>';
+      } else {
+        html += '<div class="bTimer"></div>';
+        el.style.setProperty('--ms', BANNER_MS + 'ms');
+        setTimeout(() => closeBanner(el), BANNER_MS);
+      }
+      el.innerHTML = html;
+      el.querySelector('.bClose').addEventListener('click', () => closeBanner(el));
+      el.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => { handlers.cargo(ev.cargoIndex, b.dataset.c); closeBanner(el); }));
+      box.prepend(el);
+      const open = [...box.querySelectorAll('.banner:not(.closing)')];
+      if (open.length > MAX_BANNERS) closeBanner(open.reverse().find((b) => !b.dataset.cargo) || open[0]);
+    }
+    // Cargo banners go away by themselves once the cargo is chosen or has landed.
+    function syncBanners(state) {
+      document.querySelectorAll('#banners .banner[data-cargo]').forEach((el) => {
+        const k = state.cargo[+el.dataset.cargo];
+        if (!k || k.choice || k.arrived) closeBanner(el);
+      });
+    }
+    function clearBanners() { $('banners').innerHTML = ''; }
 
     function showDebrief(state, onRestart, onMenu) {
       const d = MT.Sim.debrief(state);
@@ -298,7 +360,7 @@
       if (html !== lastBar) { $('countdowns').innerHTML = html; lastBar = html; }
     }
 
-    return { live, update, capcom, setSpeed, tooltip, showStart, showEvent, showDebrief, showTower, isModalOpen, select, get selected() { return selected; } };
+    return { togglePanel, live, update, capcom, setSpeed, tooltip, showStart, banner, clearBanners, showDebrief, showTower, isModalOpen, select, get selected() { return selected; } };
   }
 
   MT.UI = UI;

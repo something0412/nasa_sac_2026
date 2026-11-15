@@ -9,21 +9,40 @@
     crew: 4,
     workers: 2, // astronauts who go outside to build (EVA)
 
-    map: { cols: 20, rows: 14, tile: 40 },
+    // The world is 80 x 56 tiles; the camera shows 20 x 14 of them. Drag to look around.
+    map: { cols: 80, rows: 56, tile: 40, viewCols: 20, viewRows: 14 },
+    base: { c: 39, r: 27 }, // where the habitat starts (top-left tile of its 2x2), middle of the map
 
     // REAL: at the lunar south pole the Sun never rises high. It circles the horizon once per
     // synodic month (29.53 days), so crater rims and hills cast shadows that come and go.
     // High ridges (e.g. Shackleton rim) are lit up to ~80-90% of the time (LRO LOLA, Mazarico et al. 2011).
-    sun: { degPerHour: 360 / (29.53 * 24), startAz: 90 },
+    // fadeDeg: as the Sun slides behind a hill, its disk is covered bit by bit, so light fades over
+    // a few degrees of Sun movement (GAME: 3° each side = about 12 game hours from full Sun to full shadow).
+    sun: { degPerHour: 360 / (29.53 * 24), startAz: 90, fadeDeg: 3 },
 
     zones: {
       ridge: { name: 'High ridge', color: '#9a9aa2', shadowArcs: [[262, 292]], blurb: 'High crater rim. The Sun is blocked only for short times.' },
       plain: { name: 'Plain', color: '#76767e', shadowArcs: [[180, 250], [300, 320]], blurb: 'Lower ground. Hills block the Sun for days at a time.' },
       ice: { name: 'Shadowed crater (ice)', color: '#2b3448', alwaysDark: true, blurb: 'Never sees the Sun (about -230 °C). Water ice hides here.' },
     },
+    // Terrain features in 0..1 map coordinates (u = left→right, v = top→bottom), so they scale with the map.
+    // Ovals: centre (u, v), radius (ru, rv). The first match wins. Labels are drawn on the map.
+    features: [
+      { zone: 'ice', u: 0.82, v: 0.76, ru: 0.2, rv: 0.22, label: 'SHADOWED CRATER (ICE)' },
+      { zone: 'ice', u: 0.12, v: 0.86, ru: 0.07, rv: 0.09, label: 'SMALL ICE CRATER' },
+      { zone: 'ice', u: 0.47, v: 0.09, ru: 0.055, rv: 0.07, label: 'ICE CRATER' },
+      { zone: 'ridge', corner: 0.36, u: 0.1, v: 0.06, label: 'HIGH RIDGE (crater rim)' }, // top-left triangle
+      { zone: 'ridge', u: 0.9, v: 0.12, ru: 0.11, rv: 0.13, label: 'HIGH HILL' },
+      { zone: 'ridge', u: 0.27, v: 0.68, ru: 0.06, rv: 0.08, label: 'SMALL HILL' },
+      { zone: 'ridge', u: 0.66, v: 0.3, ru: 0.035, rv: 0.05, label: 'ROCKY KNOB' },
+    ],
     zoneAt(c, r) {
-      if (((c - 16.5) / 4.2) ** 2 + ((r - 10.5) / 3.3) ** 2 < 1) return 'ice';
-      if (r + 0.7 * c < 5) return 'ridge';
+      const u = (c + 0.5) / this.map.cols, v = (r + 0.5) / this.map.rows;
+      const wobble = 0.025 * Math.sin(u * 23) + 0.02 * Math.sin(v * 31); // makes edges less perfect
+      for (const f of this.features) {
+        const inside = f.corner ? u + v + wobble < f.corner : ((u - f.u) / f.ru) ** 2 + ((v - f.v) / f.rv) ** 2 < 1 + wobble * 4;
+        if (inside) return f.zone;
+      }
       return 'plain';
     },
 

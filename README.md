@@ -13,11 +13,19 @@ Open http://localhost:8137. (Double-clicking `index.html` also works: no build s
 
 Controls: click a build button (or keys 1-7), then click the map. Click a module to turn it ON/OFF.
 Click a module that is still being built to cancel it. Space = pause. Esc / right-click = stop building.
+Drag the map to look around (the world is 80 x 56 tiles, the view shows 20 x 14). If the base is off-screen,
+a 🏠 BASE tag on the edge points the way; click it or press H to fly back.
+The map fills the whole window. The top bar has the speed buttons, the sunlight forecast and the day.
+On the map: CAPCOM, Why? and Mission log are small buttons on the left (click to expand; CAPCOM shows a dot
+when a new message arrives), Build is on the right, Supplies at the bottom.
+Click a panel's title bar (or keys S = Supplies, B = Build, W = Why?, C = CAPCOM, L = Log) to collapse/expand it.
+The choice is remembered per browser.
 
 ## What makes it different
 
 - **You see and build the base** on a map, not just a dashboard.
-- **Real south pole sunlight:** the Sun circles the horizon, so shadows move. The high ridge is sunny most
+- **Real south pole sunlight:** the Sun circles the horizon once every 29.5 days, so shadows slowly turn and
+  light fades gradually (over ~12 game hours) as the Sun slides behind hills. Solar power follows the light level. The high ridge is sunny most
   of the time; the plain gets multi-day shadows. A sunlight forecast strip lets players plan.
 - **Visible cause chains:** "Why is this happening?" shows, live: shadow → solar 0 kW → battery draining →
   greenhouse off → no new food. Power cables on the map turn red when a module has no power.

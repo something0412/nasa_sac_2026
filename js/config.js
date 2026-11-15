@@ -130,23 +130,42 @@
     },
     // Terrain features in 0..1 map coordinates (u = left→right, v = top→bottom), so they scale with the map.
     // Ovals: centre (u, v), radius (ru, rv). The first match wins. Labels are drawn on the map.
+    // height (2.5D view only, GAME): how many terrace steps a hill rises (+) or a crater sinks (-) at its
+    // middle. The steps start at its edge. The game rules ignore it (zones decide sunlight and building).
     features: [
-      { zone: 'ice', u: 0.82, v: 0.76, ru: 0.2, rv: 0.22, label: 'SHADOWED CRATER (ICE)' },
-      { zone: 'ice', u: 0.12, v: 0.86, ru: 0.07, rv: 0.09, label: 'SMALL ICE CRATER' },
-      { zone: 'ice', u: 0.47, v: 0.09, ru: 0.055, rv: 0.07, label: 'ICE CRATER' },
-      { zone: 'ridge', corner: 0.36, u: 0.1, v: 0.06, label: 'HIGH RIDGE (crater rim)' }, // top-left triangle
-      { zone: 'ridge', u: 0.9, v: 0.12, ru: 0.11, rv: 0.13, label: 'HIGH HILL' },
-      { zone: 'ridge', u: 0.27, v: 0.68, ru: 0.06, rv: 0.08, label: 'SMALL HILL' },
-      { zone: 'ridge', u: 0.66, v: 0.3, ru: 0.035, rv: 0.05, label: 'ROCKY KNOB' },
+      { zone: 'ice', u: 0.82, v: 0.76, ru: 0.2, rv: 0.22, height: -5, label: 'SHADOWED CRATER (ICE)' },
+      { zone: 'ice', u: 0.12, v: 0.86, ru: 0.07, rv: 0.09, height: -3, label: 'SMALL ICE CRATER' },
+      { zone: 'ice', u: 0.47, v: 0.09, ru: 0.055, rv: 0.07, height: -3, label: 'ICE CRATER' },
+      { zone: 'ridge', corner: 0.36, u: 0.1, v: 0.06, height: 5, label: 'HIGH RIDGE (crater rim)' }, // top-left triangle
+      { zone: 'ridge', u: 0.9, v: 0.12, ru: 0.11, rv: 0.13, height: 5, label: 'HIGH HILL' },
+      { zone: 'ridge', u: 0.27, v: 0.68, ru: 0.06, rv: 0.08, height: 3, label: 'SMALL HILL' },
+      { zone: 'ridge', u: 0.66, v: 0.3, ru: 0.035, rv: 0.05, height: 2, label: 'ROCKY KNOB' },
     ],
-    zoneAt(c, r) {
+    // The feature a square is in (first match wins) and how far it is from the feature's middle
+    // (d: 0 = middle, just under 1 = edge), or null on the open plain.
+    featureAt(c, r) {
       const u = (c + 0.5) / this.map.cols, v = (r + 0.5) / this.map.rows;
       const wobble = 0.025 * Math.sin(u * 23) + 0.02 * Math.sin(v * 31); // makes edges less perfect
       for (const f of this.features) {
-        const inside = f.corner ? u + v + wobble < f.corner : ((u - f.u) / f.ru) ** 2 + ((v - f.v) / f.rv) ** 2 < 1 + wobble * 4;
-        if (inside) return f.zone;
+        if (f.corner) {
+          const s = u + v + wobble;
+          if (s < f.corner) return { f, d: s / f.corner };
+        } else {
+          const q = ((u - f.u) / f.ru) ** 2 + ((v - f.v) / f.rv) ** 2, lim = 1 + wobble * 4;
+          if (q < lim) return { f, d: Math.sqrt(q / lim) };
+        }
       }
-      return 'plain';
+      return null;
+    },
+    zoneAt(c, r) {
+      const k = this.featureAt(c, r);
+      return k ? k.f.zone : 'plain';
+    },
+    // Terrace level of a square for the 2.5D view: 0 on the plain, 1 at a feature's edge, up to `height` in its middle.
+    heightAt(c, r) {
+      const k = this.featureAt(c, r);
+      if (!k || !k.f.height) return 0;
+      return Math.sign(k.f.height) * Math.ceil((1 - k.d) * Math.abs(k.f.height));
     },
 
     modules: {

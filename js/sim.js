@@ -14,6 +14,13 @@
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
+  // Random numbers that live in the state (so a mission with the same seed always plays the same).
+  function rnd(state) {
+    state.rngA = (state.rngA + 0x6d2b79f5) | 0;
+    let t = Math.imul(state.rngA ^ (state.rngA >>> 15), 1 | state.rngA);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const day = (h) => Math.floor(h / 24) + 1;
   const fmtDay = (h) => `Day ${day(h)}`;
@@ -60,6 +67,9 @@
         storms: d.sepStorms.map((s) => ({ h: s.h, strong: s.strong, date: s.t, ...(s.strong ? R.strong : R.moderate) })),
         geomag: d.geomagStorms.filter((g) => g.h < cfg().missionHours),
         radCurve: lab && lab.may2024 ? lab.may2024.extra : null,
+        // REAL: the Eta Aquariid meteor shower (dust from Halley's Comet) peaked around 5 May 2024.
+        // The Moon travels with Earth, so it crosses the same dust (NASA watches for impact flashes on the Moon).
+        meteors: [{ h: 96, dur: 6, name: 'Eta Aquariids', date: '2024-05-05' }],
       };
     }
     // Random training mission: flares every 1-3 days. Bigger flares are more likely to send particles.
@@ -85,7 +95,15 @@
     }
     storms.sort((a, b) => a.h - b.h);
     giveRealShapes(storms, rand);
-    return { flares, storms, geomag: [], radCurve: null };
+    // Meteor showers: 1 or 2 per training mission, named after real yearly showers.
+    const SHOWERS = ['Perseids', 'Geminids', 'Quadrantids', 'Lyrids', 'Orionids', 'Leonids'];
+    const meteors = [];
+    const nMet = 1 + (rand() < 0.5 ? 1 : 0);
+    for (let i = 0; i < nMet; i++) {
+      meteors.push({ h: Math.round(60 + rand() * (cfg().missionHours - 130)), dur: 4 + Math.floor(rand() * 3), name: SHOWERS[Math.floor(rand() * SHOWERS.length)] });
+    }
+    meteors.sort((a, b) => a.h - b.h);
+    return { flares, storms, geomag: [], radCurve: null, meteors };
   }
 
   /**
@@ -129,9 +147,22 @@
       cargo: C.cargo.map((c) => ({ h: c.h, choice: null, asked: false, arrived: false })),
       since: {}, log: [], warned: {},
       stats: { foodMade: 0, foodEaten: 0, o2Made: 0, waterMined: 0, unpoweredH: {}, darkH: 0, solarKwh: 0 },
-      history: { o2: [], food: [], water: [], battery: [], dose: [], solar: [], use: [] },
+      history: { o2: [], food: [], water: [], battery: [], dose: [], solar: [], use: [], hp: [], crew: [] },
       power: { supply: 0, use: 0, cap: 0 },
       stormRate: 0,
+      rngA: (seed ^ 0x5bd1e995) | 0,
+      jobSeq: 0, // order in which jobs (build, repair, shield) were asked for
+      medbayUses: 0, // healing treatments used (max C.astro.medbay.uses per mission)
+      meteorOn: null, // the meteor shower happening right now, if any
+      // AMS: each astronaut. Gym visits are staggered so they don't all need the gym at once.
+      crew: C.astro.names.slice(0, C.crew).map((name, i) => ({
+        id: i + 1, name, hp: 100, dose: 0, injury: 0, stress: 0, bone: 100,
+        where: 'hab', job: null, gymLeft: 0, gymId: null, sinceGym: i * 5,
+        medbay: false, medbayAt: null, medbayWhy: null, hits: 0, injuries: 0, warnedHp: 0,
+        wounds: [], // each injury separately: { hp, what, h } (the medbay heals the smallest one)
+        heal: null, // while resting in the medbay: { left, total, wound, amount, what }
+        boneTier: 0, // 0 ok, 1 fragile (<50%), 2 severe (<25%): for one-time warnings
+      })),
     };
     for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) state.tiles.push(C.zoneAt(c, r));
 
@@ -140,6 +171,7 @@
     state.storms = sw.storms;
     state.geomag = sw.geomag;
     state.radCurve = sw.radCurve; // real hour-by-hour LRO storm dose (history mission only)
+    state.meteors = sw.meteors || [];
 
     // Light forecast for every zone, every hour of the mission (shown as the sunlight strip).
     state.light = {};
@@ -163,7 +195,8 @@
 
   function addModule(state, type, c, r, built) {
     const d = cfg().modules[type];
-    const m = { id: state.nextId++, type, c, r, w: d.w, h: d.h, on: true, built: !!built, progress: built ? d.work : 0, powered: false, lit: false, noWater: false };
+    const m = { id: state.nextId++, type, c, r, w: d.w, h: d.h, on: true, built: !!built, progress: built ? d.work : 0, powered: false, lit: false, noWater: false,
+      seq: ++state.jobSeq, damaged: false, repair: null, viewed: false };
     state.modules.push(m);
     return m;
   }
@@ -177,13 +210,99 @@
    *  The crew builds in the order things were placed, so that is the lowest id. */
   const firstTower = (state) => built(state, 'tower').reduce((a, m) => (!a || m.id < a.id ? m : a), null);
   const batteryCap = (state) => built(state, 'battery').length * cfg().modules.battery.store;
-  const currentJob = (state) => {
-    const m = state.modules.find((x) => !x.built);
-    if (m) return { kind: 'module', m };
-    if (state.berm.building && !state.berm.built) return { kind: 'berm' };
-    return null;
+  // ----- crew & jobs -----
+  const activeCrew = (state) => state.crew.filter((a) => !a.medbay);
+  /** Every job waiting or in progress, oldest first: new buildings, repairs, the moon-dirt shield.
+   *  Each job is done by exactly ONE astronaut. */
+  function jobList(state) {
+    const C = cfg(), list = [];
+    for (const m of state.modules) {
+      if (!m.built) list.push({ key: 'b' + m.id, kind: 'module', m, seq: m.seq, done: m.progress, total: C.modules[m.type].work });
+      else if (m.repair) list.push({ key: 'r' + m.id, kind: 'repair', m, seq: m.repair.seq, done: m.repair.progress, total: m.repair.work });
+    }
+    if (state.berm.building && !state.berm.built) list.push({ key: 'berm', kind: 'berm', seq: state.berm.seq || 0, done: state.berm.progress, total: C.bermWork });
+    list.forEach((j) => { j.worker = state.crew.find((a) => a.job === j.key && !a.medbay) || null; });
+    return list.sort((a, b) => a.seq - b.seq);
+  }
+  const currentJob = (state) => jobList(state)[0] || null;
+  const workersOutside = (state) => state.crew.filter((a) => a.where === 'outside').length;
+  const isSlow = (a) => a.stress >= cfg().astro.stress.slowAt;
+  const isGrounded = (a) => a.bone < cfg().astro.bone.groundedBelow;
+  /** Radiation never heals, so it sets the highest health an astronaut can ever get back to. */
+  const maxHp = (a) => clamp(100 - a.dose * cfg().astro.hpPerMsv, 0, 100);
+  function addWound(state, a, hp, what) {
+    a.wounds.push({ hp, what, h: state.hour });
+    a.injury = a.wounds.reduce((s, w) => s + w.hp, 0);
+  }
+  /** Permanently out: health ran out, or bones reached 0%. */
+  function sendToMedbay(state, a, why, say) {
+    a.medbay = true; a.medbayAt = state.hour; a.medbayWhy = why; a.job = null; a.where = 'medbay'; a.gymLeft = 0; a.gymId = null; a.heal = null;
+    say('bad', `🏥 ${a.name} was taken to the medbay`,
+      (why === 'bones' ? `${a.name}'s bones got too weak to stand safely (0% bone density), ` : `${a.name} has no health left, `) +
+      'so the crew carried them to the medbay inside the habitat to rest. They are safe, but they won\'t be back for this mission.');
+  }
+
+  /** Heal `amount` HP of injuries, smallest injury first. Healed injuries disappear. */
+  function healWounds(a, amount) {
+    let left = amount;
+    for (const w of a.wounds.slice().sort((x, y) => x.hp - y.hp)) {
+      if (left <= 0) break;
+      const take = Math.min(w.hp, left);
+      w.hp -= take; left -= take;
+    }
+    a.wounds = a.wounds.filter((w) => w.hp > 1e-9);
+    a.injury = a.wounds.reduce((s, w) => s + w.hp, 0);
+  }
+  /** How much one treatment would heal: always healHp, but never above the radiation limit (maxHp). */
+  const healAmount = (a) => Math.min(cfg().astro.medbay.healHp, a.injury);
+
+  /**
+   * Send an astronaut to rest in the medbay for 3 days. It heals exactly healHp (10) of injuries, but never
+   * above their radiation limit (maxHp). The medbay can do this C.astro.medbay.uses times per mission.
+   */
+  function startHeal(state, id) {
+    const M = cfg().astro.medbay, a = state.crew.find((x) => x.id === id);
+    if (!a || a.medbay) return { ok: false, why: 'This astronaut cannot be treated.' };
+    if (a.heal) return { ok: false, why: `${a.name} is already resting in the medbay.` };
+    if (state.medbayUses >= M.uses) return { ok: false, why: `The medbay's supplies are used up (${M.uses} treatments per mission).` };
+    if (!a.wounds.length) return { ok: false, why: `${a.name} has no injuries to heal. Radiation damage can never be healed.` };
+    const amount = healAmount(a);
+    state.medbayUses++;
+    a.heal = { left: M.healH, total: M.healH, amount };
+    a.job = null; a.gymLeft = 0; a.gymId = null; a.where = 'medbay';
+    log(state, 'info', `${a.name} went to the medbay (+${Math.round(amount)} HP over ${M.healH / 24} days). Treatments left: ${M.uses - state.medbayUses}.`);
+    return { ok: true, amount };
+  }
+  const crewSummary = (state) => {
+    const act = activeCrew(state);
+    return { active: act.length, total: state.crew.length, avgHp: act.length ? act.reduce((s, a) => s + a.hp, 0) / act.length : 0 };
   };
-  const workersOutside = (state) => (state.status === 'running' && !state.sheltering && currentJob(state) ? cfg().workers : 0);
+
+  /** Click on a damaged building: costs parts, then one astronaut goes out to fix it. */
+  function orderRepair(state, id) {
+    const C = cfg(), m = state.modules.find((x) => x.id === id);
+    if (!m || !m.built || !m.damaged) return { ok: false, why: 'Nothing to repair' };
+    if (m.repair) return { ok: false, why: 'A repair is already planned for this building' };
+    if (state.res.parts < C.damage.repairCost) return { ok: false, why: `Repairs need ${C.damage.repairCost} part (you have ${state.res.parts})` };
+    state.res.parts -= C.damage.repairCost;
+    m.repair = { progress: 0, work: Math.max(2, Math.ceil(C.modules[m.type].work * C.damage.repairWork)), seq: ++state.jobSeq };
+    log(state, 'info', `Repair ordered: ${C.modules[m.type].name}`);
+    return { ok: true };
+  }
+
+  /** Click on an Astronomy Tower. The FIRST look through each new tower lowers everyone's stress. */
+  function enterTower(state, id) {
+    const C = cfg(), m = state.modules.find((x) => x.id === id);
+    if (!m || m.type !== 'tower' || !m.built) return { ok: false, why: 'Not ready yet' };
+    if (m.damaged) return { ok: false, why: 'This tower is damaged and cannot be entered. Click it to order a repair.' };
+    const first = !m.viewed;
+    m.viewed = true;
+    if (first) {
+      for (const a of activeCrew(state)) a.stress = Math.max(0, a.stress - C.astro.stress.towerRelief);
+      log(state, 'good', `The crew looked through the new Astronomy Tower together. Everyone's stress went down by ${C.astro.stress.towerRelief}!`);
+    }
+    return { ok: true, relief: first };
+  }
 
   function moduleAt(state, c, r) {
     return state.modules.find((m) => c >= m.c && c < m.c + m.w && r >= m.r && r < m.r + m.h);
@@ -227,6 +346,7 @@
   function startBerm(state) {
     if (state.berm.built || state.berm.building) return false;
     state.berm.building = true;
+    state.berm.seq = ++state.jobSeq;
     log(state, 'info', 'Crew starts piling moon dirt on the habitat.');
     return true;
   }
@@ -268,6 +388,139 @@
     return s;
   }
 
+  // ---------- weather damage ----------
+  function damageRoll(state, chance, cause, say) {
+    const C = cfg(), hit = [];
+    for (const m of built(state)) {
+      if (m.damaged || !C.damage.canBreak.includes(m.type)) continue;
+      if (rnd(state) < chance) { m.damaged = true; hit.push(C.modules[m.type].name); }
+    }
+    if (hit.length) {
+      say('warn', `🔧 Damaged by ${cause}: ${hit.join(', ')}`,
+        'Damaged buildings work at half speed (Fitness Centers and Astronomy Towers can\'t be used). Click a damaged building to repair it (1 part).');
+    }
+  }
+
+  // ---------- crew: where everyone goes this hour ----------
+  // Order of importance: shelter (if the player sent the crew there) → keep working on their job →
+  // Fitness Center when it's their turn → pick up a new job (max C.maxOutside outside) → habitat.
+  function assignCrew(state, say) {
+    for (const a of activeCrew(state)) if (a.heal) a.where = 'medbay'; // resting: not available for anything else
+    const C = cfg(), B = C.astro.bone, act = activeCrew(state).filter((a) => !a.heal);
+    const jobs = jobList(state), open = new Set(jobs.map((j) => j.key));
+    for (const a of act) if (a.job && !open.has(a.job)) a.job = null; // finished or cancelled
+    if (state.sheltering && hasShelter(state)) { for (const a of act) a.where = 'shelter'; return; } // jobs wait
+    // Weak bones: not allowed outside (fracture risk) until they train back up.
+    for (const a of act) {
+      if (isGrounded(a)) {
+        if (!a.groundedWarned) { a.groundedWarned = true; say('warn', `🦴 ${a.name} is grounded`, `Bone density is below ${B.groundedBelow}%, so it is not safe to work outside. They need to train in a Fitness Center.`); }
+        if (a.job) a.job = null;
+      } else a.groundedWarned = false;
+    }
+    // Fitness Center visits (one astronaut per gym at a time; gym needs power and no damage).
+    const gyms = built(state, 'gym').filter((m) => m.on && m.powered && !m.damaged);
+    const busy = new Set();
+    for (const a of act) {
+      if (a.gymLeft > 0 && gyms.some((g) => g.id === a.gymId) && !busy.has(a.gymId)) busy.add(a.gymId);
+      else { a.gymLeft = 0; a.gymId = null; }
+    }
+    for (const a of act) {
+      if (a.job || a.gymLeft > 0 || a.sinceGym < B.visitEveryH) continue;
+      const g = gyms.find((x) => !busy.has(x.id));
+      if (!g) break;
+      busy.add(g.id); a.gymId = g.id; a.gymLeft = B.visitH;
+    }
+    // Hand out jobs: one astronaut each, calmest free astronaut first.
+    const taken = new Set(act.filter((a) => a.job).map((a) => a.job));
+    let outside = taken.size;
+    for (const j of jobs) {
+      if (taken.has(j.key)) continue;
+      if (outside >= C.maxOutside) break;
+      const free = act.filter((a) => !a.job && a.gymLeft <= 0 && !isGrounded(a)).sort((x, y) => x.stress - y.stress || x.id - y.id)[0];
+      if (!free) break;
+      free.job = j.key; taken.add(j.key); outside++;
+    }
+    for (const a of act) a.where = a.job ? 'outside' : a.gymLeft > 0 ? 'gym' : 'hab';
+  }
+
+  // ---------- crew: one hour of radiation, stress, bones and accidents for each astronaut ----------
+  function updateCrew(state, S, shower, say) {
+    const C = cfg(), A = C.astro, bg = C.rad.surfacePerH;
+    const inside = state.berm.built ? C.rad.habBerm : C.rad.hab;
+    const shelterOk = hasShelter(state);
+    const stormOn = S > C.rad.stormOn;
+    const per = 1 / state.crew.length; // doseFrom = crew average, for the debrief
+    for (const a of activeCrew(state)) {
+      // Radiation. Outside = everything; habitat and gym = partly blocked; shelter = 95% blocked.
+      const f = a.where === 'outside' ? 1 : a.where === 'shelter' ? (shelterOk ? C.rad.shelter : inside) : inside;
+      const dBg = f * bg, dStorm = f * S;
+      a.dose += dBg + dStorm;
+      if (a.where === 'outside') state.doseFrom.outside += (dBg + dStorm) * per;
+      else { state.doseFrom.background += dBg * per; state.doseFrom.storm += dStorm * per; }
+
+      // Stress: isolation outside, plus being caught in a storm or a meteor shower.
+      const St = A.stress;
+      let ds = 0;
+      if (a.where === 'outside') ds += St.outsidePerH;
+      if (stormOn) ds += a.where === 'outside' ? St.stormOutsidePerH : a.where === 'shelter' ? St.stormShelterPerH : St.stormInsidePerH;
+      if (shower) ds += a.where === 'outside' ? St.meteorOutsidePerH : St.meteorInsidePerH;
+      const wasSlow = isSlow(a);
+      a.stress = clamp(a.stress + ds, 0, 100);
+      if (!wasSlow && isSlow(a)) say('warn', `😰 ${a.name} is very stressed`, `Stress ${Math.round(a.stress)}: they now work at half speed. Opening a NEW Astronomy Tower for the first time lowers everyone's stress.`);
+
+      // Bones: always weakening in Moon gravity; training in the Fitness Center builds them back.
+      const Bo = A.bone;
+      if (a.where === 'gym') {
+        a.bone = Math.min(100, a.bone + Bo.gymGainPerH * (a.bone < Bo.severeBelow ? Bo.severeGymFactor : 1));
+        a.gymLeft--;
+        if (a.gymLeft <= 0) { a.sinceGym = 0; a.gymId = null; }
+      } else a.sinceGym++;
+      a.bone = Math.max(0, a.bone - Bo.lossPerH);
+      // Weaker bones = more and worse injuries, and worry adds stress.
+      const tier = a.bone < Bo.severeBelow ? 2 : a.bone < Bo.fragileBelow ? 1 : 0;
+      if (tier > a.boneTier) {
+        if (tier === 1) say('warn', `🦴 ${a.name} has FRAGILE bones (${Math.round(a.bone)}%)`, `Below ${Bo.fragileBelow}%: fractures happen ${Bo.fragileMult}x as often and hurt ${Bo.fragileMult}x as much, and they are worried (stress). Get them to a Fitness Center!`);
+        else say('bad', `🦴 ${a.name} has SEVERE bone loss (${Math.round(a.bone)}%)`, `Below ${Bo.severeBelow}%: injuries ${Bo.severeMult}x, more stress, and training only works half as well. At 0% they must go to the medbay for good.`);
+      }
+      a.boneTier = tier;
+      if (tier) a.stress = clamp(a.stress + (tier === 2 ? Bo.severeStressPerH : Bo.fragileStressPerH), 0, 100);
+      const mult = tier === 2 ? Bo.severeMult : tier === 1 ? Bo.fragileMult : 1;
+      if (a.bone < Bo.injuryBelow && rnd(state) < Bo.injuryChancePerH * mult) {
+        const hurt = Bo.injuryHp * mult, what = tier ? 'bone fracture' : 'sprain';
+        addWound(state, a, hurt, what); a.injuries++;
+        log(state, 'warn', `${a.name} got a ${what} (weak bones): -${hurt} HP.`);
+      }
+
+      // Meteor hits (only when outside).
+      if (shower && a.where === 'outside' && rnd(state) < C.meteor.hitChancePerH) {
+        const [lo, hi] = C.meteor.hitHp;
+        const dmg = Math.round(lo + rnd(state) * (hi - lo));
+        addWound(state, a, dmg, 'meteoroid hit'); a.hits++;
+        say('bad', `☄️ ${a.name} was hit by a tiny meteoroid!`, `-${dmg} HP. Their suit held, but they should come inside.`);
+      }
+
+      // Medbay rest: injuries heal a little every hour for 3 days (exactly healHp in total, smallest first).
+      if (a.heal) {
+        const H = a.heal;
+        healWounds(a, H.amount / H.total);
+        H.left--;
+        if (H.left <= 0) {
+          a.heal = null;
+          say('good', `🏥 ${a.name} has healed`, `+${Math.round(H.amount)} HP. Radiation damage stays: they can never go above ${Math.round(maxHp(a))} HP.`);
+        }
+      }
+
+      // Health: radiation over the whole session (can never heal: maxHp) minus injuries (the medbay can heal those).
+      a.hp = clamp(maxHp(a) - a.injury, 0, 100);
+      if (a.hp < 50 && a.warnedHp < 1) { a.warnedHp = 1; say('warn', `❤️ ${a.name} is down to ${Math.round(a.hp)} HP`, 'Radiation damage never heals. Injuries can be healed in the medbay (button in the AMS).'); }
+      if (a.hp < 25 && a.warnedHp < 2) { a.warnedHp = 2; say('bad', `❤️ ${a.name} is down to ${Math.round(a.hp)} HP!`, 'If their health runs out they must go to the medbay for good.'); }
+      if (a.hp <= 0) sendToMedbay(state, a, 'health', say);
+      else if (a.bone <= 0) sendToMedbay(state, a, 'bones', say);
+    }
+    // Crew average dose (charts and score).
+    state.dose = state.crew.reduce((s, a) => s + a.dose, 0) / state.crew.length;
+  }
+
   // ---------- power ----------
   function updatePower(state, h, dryRun) {
     const C = cfg();
@@ -276,7 +529,7 @@
       m.light = zoneLight(state, zoneOf(state, m.c, m.r), h + 0.5);
       m.lit = m.light > 0.5;
       m.powered = m.light > 0.02;
-      if (m.on) supply += C.modules.solar.makes * m.light; // half-covered Sun = half power
+      if (m.on) supply += C.modules.solar.makes * m.light * (m.damaged ? C.damage.brokenRate : 1); // half-covered Sun = half power
     }
     for (const m of built(state, 'battery')) m.powered = true;
     const consumers = built(state).filter((m) => needOf(state, m) > 0).sort((a, b) => (C.modules[a.type].priority - C.modules[b.type].priority) || a.id - b.id);
@@ -367,17 +620,42 @@
         hasShelter(state) ? 'Another wave of solar particles is arriving.'
           : 'Another wave of solar particles is arriving. Stop work outside; the habitat blocks half of it.'); // CAPCOM only, no pop-up
     }
+    // Each time a storm (or a new wave) starts, fast particles can glitch electronics.
+    if (!stormWasOn && S > C.rad.stormOn) damageRoll(state, C.damage.stormChance, 'the radiation storm', say);
 
-    // Construction.
-    const job = currentJob(state);
-    const wOut = workersOutside(state);
-    if (job && wOut) {
-      if (job.kind === 'module') {
-        job.m.progress += wOut;
-        if (job.m.progress >= C.modules[job.m.type].work) { job.m.built = true; say('good', `Built: ${C.modules[job.m.type].name}`, ''); }
+    // Meteor showers: forecast, start/end, building damage. (Hits on astronauts happen in the crew update below.)
+    for (const s of state.meteors) {
+      if (!s.warned && h + 1 >= s.h - C.meteor.warnLead) {
+        s.warned = true;
+        say('warn', `☄️ Meteor shower coming: the ${s.name}`,
+          `It starts in about ${C.meteor.warnLead} hours and lasts ${s.dur} hours. Astronauts outside can be hit and buildings can be damaged. Keep the crew inside!` +
+          (s.date ? ` (Real event: around ${s.date})` : ''), { banner: true });
+      }
+    }
+    const shower = state.meteors.find((s) => h >= s.h && h < s.h + s.dur) || null;
+    if (shower && state.meteorOn !== shower) say('bad', `☄️ The ${shower.name} meteor shower has started!`, 'Tiny space rocks are hitting the ground around the base.');
+    if (!shower && state.meteorOn) log(state, 'good', 'The meteor shower is over.');
+    state.meteorOn = shower;
+    if (shower) damageRoll(state, C.damage.meteorChancePerH, 'meteors', say);
+
+    // Crew: who is where this hour (shelter, Fitness Center, outside on a job, or in the habitat).
+    assignCrew(state, say);
+    // Construction and repairs: each job has exactly one astronaut. Stressed astronauts work at half speed.
+    const jobs = jobList(state);
+    for (const a of activeCrew(state)) {
+      if (a.where !== 'outside') continue;
+      const j = jobs.find((x) => x.key === a.job);
+      if (!j) continue;
+      const work = isSlow(a) ? C.astro.stress.slowFactor : 1;
+      if (j.kind === 'module') {
+        j.m.progress += work;
+        if (j.m.progress >= j.total) { j.m.built = true; a.job = null; say('good', `Built: ${C.modules[j.m.type].name}`, `${a.name} finished it.`); }
+      } else if (j.kind === 'repair') {
+        j.m.repair.progress += work;
+        if (j.m.repair.progress >= j.total) { j.m.damaged = false; j.m.repair = null; a.job = null; say('good', `Repaired: ${C.modules[j.m.type].name}`, `${a.name} fixed it. It works at full speed again.`); }
       } else {
-        state.berm.progress += wOut;
-        if (state.berm.progress >= C.bermWork) { state.berm.built = true; state.berm.building = false; say('good', 'Habitat shielding finished', 'Moon dirt on the roof now blocks most radiation.'); }
+        state.berm.progress += work;
+        if (state.berm.progress >= C.bermWork) { state.berm.built = true; state.berm.building = false; a.job = null; say('good', 'Habitat shielding finished', `${a.name} finished piling moon dirt on the roof. It now blocks most radiation.`); }
       }
     }
 
@@ -403,20 +681,21 @@
     }
     if (state.res.battery > state.power.cap * 0.6) state.warned.batLow = false;
 
-    // Production & consumption.
-    const U = C.use, n = C.crew;
+    // Production & consumption. Damaged buildings work at half speed. Astronauts in the medbay use nothing.
+    const U = C.use, n = activeCrew(state).length;
+    const rate = (m) => (m.damaged ? C.damage.brokenRate : 1);
     for (const m of built(state, 'o2gen')) {
-      const d = C.modules.o2gen;
-      m.noWater = m.powered && state.res.water < d.waterPerH;
-      if (m.powered && !m.noWater) { state.res.water -= d.waterPerH; state.res.o2 += d.o2PerH; state.stats.o2Made += d.o2PerH; }
+      const d = C.modules.o2gen, k = rate(m);
+      m.noWater = m.powered && state.res.water < d.waterPerH * k;
+      if (m.powered && !m.noWater) { state.res.water -= d.waterPerH * k; state.res.o2 += d.o2PerH * k; state.stats.o2Made += d.o2PerH * k; }
     }
-    for (const m of built(state, 'drill')) if (m.powered) { state.res.water += C.modules.drill.waterPerH; state.stats.waterMined += C.modules.drill.waterPerH; }
+    for (const m of built(state, 'drill')) if (m.powered) { const w = C.modules.drill.waterPerH * rate(m); state.res.water += w; state.stats.waterMined += w; }
     for (const m of built(state, 'greenhouse')) {
-      const d = C.modules.greenhouse;
-      m.noWater = m.powered && state.res.water < d.waterPerH;
+      const d = C.modules.greenhouse, k = rate(m);
+      m.noWater = m.powered && state.res.water < d.waterPerH * k;
       if (m.powered && !m.noWater) {
-        const f = d.foodPerH * (state.sheltering ? 0.5 : 1);
-        state.res.water -= d.waterPerH; state.res.food += f; state.stats.foodMade += f;
+        const f = d.foodPerH * k * (state.sheltering ? 0.5 : 1);
+        state.res.water -= d.waterPerH * k; state.res.food += f; state.stats.foodMade += f;
       }
     }
     state.res.o2 -= U.o2PerPersonH * n;
@@ -447,17 +726,13 @@
     if (H.powered) state.habTemp = Math.min(T.normal, state.habTemp + T.heat);
     else state.habTemp -= habDark ? T.coolDark : T.coolLit;
 
-    // Radiation dose (average per astronaut).
-    const bg = C.rad.surfacePerH;
-    const inF = state.sheltering && hasShelter(state) ? C.rad.shelter : state.berm.built ? C.rad.habBerm : C.rad.hab;
-    const w = wOut;
-    const add = { background: ((n - w) * inF * bg) / n, storm: ((n - w) * inF * S) / n, outside: (w * (bg + S)) / n };
-    for (const k in add) { state.doseFrom[k] += add[k]; state.dose += add[k]; }
-    if (S > C.rad.stormOn && w > 0 && !state.warned['eva' + Math.floor(h / 6)]) {
+    // Each astronaut: radiation → Health, Stress, Bone density, injuries, meteor hits, medbay.
+    updateCrew(state, S, shower, say);
+    const out = activeCrew(state).filter((a) => a.where === 'outside');
+    if (S > C.rad.stormOn && out.length && !state.warned['eva' + Math.floor(h / 6)]) {
       state.warned['eva' + Math.floor(h / 6)] = true;
-      say('bad', 'Astronauts are OUTSIDE during a radiation storm!', 'They are building right now and getting the full dose. Pause building or use the shelter.');
+      say('bad', `${out.map((a) => a.name).join(' and ')} ${out.length > 1 ? 'are' : 'is'} OUTSIDE during a radiation storm!`, 'They get the full dose while they work. Use the shelter, or wait to build.');
     }
-    if (state.dose >= C.rad.warn && !state.warned.dose) { state.warned.dose = true; say('bad', `Crew radiation dose passed ${C.rad.warn} mSv`, `The safety limit is ${C.rad.limit} mSv. Avoid working outside during storms.`); }
 
     // Cargo.
     state.cargo.forEach((k, i) => {
@@ -478,6 +753,7 @@
     const Hs = state.history;
     Hs.o2.push(state.res.o2); Hs.food.push(state.res.food); Hs.water.push(state.res.water);
     Hs.battery.push(state.res.battery); Hs.dose.push(state.dose); Hs.solar.push(state.power.supply); Hs.use.push(state.power.use);
+    Hs.hp.push(crewSummary(state).avgHp); Hs.crew.push(activeCrew(state).length);
 
     state.hour++;
 
@@ -485,7 +761,7 @@
     const fail = (cause) => { state.status = 'lost'; state.failure = { cause, h: state.hour }; log(state, 'bad', 'MISSION FAILED: ' + cause); ev.push({ level: 'bad', title: 'Mission failed', end: true }); };
     if (state.res.o2 <= 0) fail('o2');
     else if (state.habTemp < T.fail) fail('cold');
-    else if (state.dose >= C.rad.limit) fail('radiation');
+    else if (!activeCrew(state).length) fail('crew');
     else if (state.foodOutH >= C.fail.foodGraceH) fail('food');
     else if (state.waterOutH >= C.fail.waterGraceH) fail('water');
     else if (state.hour >= C.missionHours) { state.status = 'won'; log(state, 'good', 'MISSION COMPLETE'); ev.push({ level: 'good', title: 'Mission complete', end: true }); }
@@ -515,19 +791,48 @@
       }
       chains.push(c.concat(consequences));
     }
+    const act = activeCrew(state);
+    const weakest = act.slice().sort((a, b) => a.hp - b.hp)[0];
     if (state.stormRate > cfg().rad.stormOn) {
       const shelter = state.sheltering && hasShelter(state);
-      const w = workersOutside(state);
+      const out = act.filter((a) => a.where === 'outside');
       chains.push([
         { icon: '☀️', text: 'Solar flare threw out fast particles', level: 'warn' },
         { icon: '☢️', text: `Radiation storm: ${round1(state.stormRate)} mSv/h outside`, level: 'bad' },
         shelter ? { icon: '🛡️', text: 'Crew in shelter: 95% blocked', level: 'ok' }
-          : w ? { icon: '👩‍🚀', text: `${w} astronauts OUTSIDE building: full dose!`, level: 'bad' }
+          : out.length ? { icon: '👩‍🚀', text: `${out.map((a) => a.name).join(', ')} OUTSIDE: full dose + stress!`, level: 'bad' }
             : { icon: '🏠', text: `Crew in habitat: ${state.berm.built ? '80' : '50'}% blocked`, level: 'warn' },
-        { icon: '📈', text: `Crew dose ${Math.round(state.dose)} / ${C.rad.limit} mSv`, level: state.dose > C.rad.warn ? 'bad' : 'warn' },
+        weakest ? { icon: '❤️', text: `Lowest health: ${weakest.name} ${Math.round(weakest.hp)} HP (never comes back)`, level: weakest.hp < 50 ? 'bad' : 'warn' } : null,
+      ].filter(Boolean));
+    }
+    if (state.meteorOn) {
+      const out = act.filter((a) => a.where === 'outside');
+      chains.push([
+        { icon: '☄️', text: `${state.meteorOn.name} meteor shower`, level: 'bad' },
+        out.length ? { icon: '👩‍🚀', text: `${out.map((a) => a.name).join(', ')} outside: can be hit (HP) + stress`, level: 'bad' } : { icon: '🏠', text: 'Crew inside: safe from hits', level: 'ok' },
+        { icon: '🔧', text: 'Buildings can be damaged → half speed until repaired', level: 'warn' },
       ]);
     }
-    const o2days = state.res.o2 / (C.use.o2PerPersonH * C.crew) / 24;
+    const broken = built(state).filter((m) => m.damaged);
+    if (broken.length) {
+      chains.push([
+        { icon: '🔧', text: `${broken.length} damaged: ${broken.map((m) => C.modules[m.type].name).join(', ')}`, level: 'warn' },
+        { icon: '🐢', text: 'Works at half speed (gyms and towers closed)', level: 'warn' },
+        { icon: '👆', text: broken.some((m) => !m.repair) ? 'Click a damaged building to repair it (1 part)' : 'Repairs are in the work queue', level: broken.some((m) => !m.repair) ? 'warn' : 'ok' },
+      ]);
+    }
+    const weakBones = act.filter((a) => a.bone < C.astro.bone.injuryBelow);
+    if (weakBones.length) {
+      const gym = built(state, 'gym').some((m) => m.on && m.powered && !m.damaged);
+      chains.push([
+        { icon: '🌙', text: 'Moon gravity is 1/6 of Earth\'s: bones get weaker', level: 'warn' },
+        { icon: '🦴', text: `Weak bones: ${weakBones.map((a) => `${a.name} ${Math.round(a.bone)}%`).join(', ')}`, level: weakBones.some(isGrounded) ? 'bad' : 'warn' },
+        gym ? { icon: '🏋️', text: 'They will train in the Fitness Center when it is their turn', level: 'ok' }
+          : { icon: '🏋️', text: 'No working Fitness Center! Build one (or fix/power it)', level: 'bad' },
+        { icon: '⚠️', text: `Below ${C.astro.bone.injuryBelow}%: injuries · ${C.astro.bone.groundedBelow}%: can't go outside · ${C.astro.bone.fragileBelow}%: fractures · ${C.astro.bone.severeBelow}%: severe · 0%: medbay for good`, level: 'warn' },
+      ]);
+    }
+    const o2days = state.res.o2 / (C.use.o2PerPersonH * Math.max(1, act.length)) / 24;
     if (state.res.water < 30 && !built(state, 'drill').some((m) => m.powered)) {
       chains.push([
         { icon: '💧', text: `Water low: ${Math.round(state.res.water)} kg`, level: 'warn' },
@@ -574,18 +879,26 @@
         if (!built(state, 'drill').length) out.tips.push('Build an Ice Drill in a dark ice crater (drag the map to find one). Ice → water → oxygen.');
         out.tips.push('Choose "Water & air" cargo if oxygen is getting low.');
         out.fact = 'On the ISS, the Oxygen Generation System makes oxygen by splitting water with electricity, the same idea as in this game. A Moon base could get that water from ice in permanently shadowed craters.';
-      } else if (cause === 'radiation') {
-        out.title = 'The crew got too much radiation';
+      } else if (cause === 'crew') {
+        out.title = 'Every astronaut is in the medbay';
         const f = state.doseFrom;
-        add(null, `Radiation the crew got: ${Math.round(f.storm)} mSv from solar storms inside, ${Math.round(f.outside)} mSv while working outside, ${Math.round(f.background)} mSv everyday background.`);
-        add(t, `The crew passed NASA's ${C.rad.limit} mSv safety limit and had to go home.`);
+        add(null, `Average radiation per astronaut: ${Math.round(f.storm)} mSv from solar storms inside, ${Math.round(f.outside)} mSv while working outside, ${Math.round(f.background)} mSv everyday background.`);
+        for (const a of state.crew.slice().sort((x, y) => (x.medbayAt || 0) - (y.medbayAt || 0))) {
+          const why = [`${Math.round(a.dose)} mSv of radiation`];
+          if (a.hits) why.push(`${a.hits} meteoroid hit${a.hits > 1 ? 's' : ''}`);
+          if (a.injuries) why.push(`${a.injuries} injur${a.injuries > 1 ? 'ies' : 'y'} from weak bones`);
+          if (a.medbayWhy === 'bones') why.push('bone density reached 0%');
+          add(a.medbayAt, `${a.name} went to the medbay (${why.join(', ')}).`);
+        }
+        add(t, 'With no healthy astronauts left, the mission had to end.');
         if (!hasShelter(state)) out.tips.push('Build a Storm Shelter early. It blocks 95% of storm radiation.');
-        out.tips.push('When a radiation storm warning comes, stop building outside and move the crew into the shelter.');
+        out.tips.push('When a storm or meteor shower warning comes, stop building outside and keep the crew inside.');
         if (!state.berm.built) out.tips.push('Pile moon dirt on the habitat ("Shield habitat" button). It blocks radiation every day.');
+        if (state.crew.some((a) => a.injuries) && !built(state, 'gym').length) out.tips.push('Build a Fitness Center so bones stay strong and astronauts don\'t get hurt.');
         const big = state.storms.find((s) => s.strong && s.profile);
         out.fact = big
-          ? `The ${big.realName} really happened. NASA's Lunar Reconnaissance Orbiter measured it from Moon orbit: an astronaut standing on the Moon with no shelter would have got about ${Math.round(big.profile.reduce((a, v) => a + crewRate(v), 0) / 10) * 10} mSv, many times NASA's ${C.rad.limit} mSv limit. That is why a storm shelter is a must for a Moon base.`
-          : 'The Moon has no magnetic field and almost no air, so solar particles hit the surface directly. Artemis astronauts in the Orion spacecraft have a plan to build a shelter out of supply bags during a solar storm.';
+          ? `The ${big.realName} really happened. NASA's Lunar Reconnaissance Orbiter measured it from Moon orbit: an astronaut standing on the Moon with no shelter would have got about ${Math.round(big.profile.reduce((a, v) => a + crewRate(v), 0) / 10) * 10} mSv. NASA's limit for a whole astronaut CAREER is 600 mSv. That is why a storm shelter is a must for a Moon base.`
+          : 'NASA limits each astronaut to 600 mSv of radiation over their whole career. The Moon has no magnetic field and almost no air, so solar particles hit the surface directly.';
       } else if (cause === 'food') {
         out.title = 'The crew ran out of food';
         if (state.stats.unpoweredH.greenhouse) add(null, `The greenhouses had no power for ${state.stats.unpoweredH.greenhouse} hours.`);
@@ -611,10 +924,10 @@
       out.title = 'Mission complete! The crew is safe.';
       out.fact = 'NASA\'s Artemis program plans to land astronauts near the lunar south pole and to learn how to live there for longer and longer missions.';
     }
-    const C2 = C.rad;
-    out.stars = won ? 1 + (state.dose < C2.warn ? 1 : 0) + (state.stats.foodMade >= state.stats.foodEaten * 0.5 ? 1 : 0) : 0;
+    const lost = state.crew.filter((a) => a.medbay);
+    out.stars = won ? 1 + (lost.length === 0 ? 1 : 0) + (state.stats.foodMade >= state.stats.foodEaten * 0.5 ? 1 : 0) : 0;
     if (won) {
-      out.tips.push(state.dose < C2.warn ? '⭐ Crew radiation dose stayed below the warning level.' : `Radiation got high (${Math.round(state.dose)} mSv). Try the shelter and habitat shielding.`);
+      out.tips.push(lost.length === 0 ? '⭐ All 4 astronauts stayed healthy.' : `${lost.map((a) => a.name).join(', ')} ended up in the medbay. Use the shelter and stay inside during storms and meteor showers.`);
       out.tips.push(state.stats.foodMade >= state.stats.foodEaten * 0.5 ? '⭐ Greenhouses grew at least half of the food.' : 'Try to grow at least half of your food in greenhouses.');
     }
     out.stats = {
@@ -644,6 +957,11 @@
       out.push({ kind: 'stormActive', icon: '☢️', level: 'bad', left: Math.max(0, end - now), total: Math.max(1, end - started),
         label: state.sheltering ? 'Storm active (crew sheltered) · ends in about' : 'Storm active · ends in about' });
     }
+    // Meteor showers: countdown after the forecast, then "active".
+    for (const s of state.meteors) {
+      if (s.warned && now < s.h) out.push({ kind: 'meteor', icon: '☄️', level: 'warn', left: s.h - now, total: C.meteor.warnLead, label: `${s.name} meteor shower starts in` });
+      else if (now >= s.h && now < s.h + s.dur) out.push({ kind: 'meteorActive', icon: '☄️', level: 'bad', left: s.h + s.dur - now, total: s.dur, label: 'Meteor shower · ends in' });
+    }
     // Next cargo lander.
     const i = state.cargo.findIndex((k) => !k.arrived);
     if (i >= 0) {
@@ -658,7 +976,8 @@
 
   MT.Sim = {
     upcoming, stormRateAt,
-    create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo,
-    causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, currentJob, workersOutside, hasShelter, firstTower, batteryCap, needOf, built, fmtDay, day,
+    create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo, orderRepair, enterTower, startHeal, healAmount, maxHp,
+    causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, currentJob, jobList, workersOutside, activeCrew, crewSummary, isSlow, isGrounded,
+    hasShelter, firstTower, batteryCap, needOf, built, fmtDay, day,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

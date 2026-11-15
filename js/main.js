@@ -14,6 +14,15 @@
     berm: () => { if (state && MT.Sim.startBerm(state)) refresh(); },
     shelter: () => { if (state) { MT.Sim.setShelter(state, !state.sheltering); refresh(); } },
     cargo: (i, opt) => { MT.Sim.chooseCargo(state, i, opt); refresh(); },
+    heal: (id) => {
+      if (!state || state.status !== 'running') return;
+      const r = MT.Sim.startHeal(state, id);
+      const a = state.crew.find((x) => x.id === id);
+      ui.capcom(r.ok
+        ? { level: 'info', title: `🏥 ${a.name} is resting in the medbay`, text: `Healing +${Math.round(r.amount)} HP over ${MT.CONFIG.astro.medbay.healH / 24} days. Radiation damage (purple) can't be healed.` }
+        : { level: 'warn', title: "Can't use the medbay", text: r.why });
+      refresh();
+    },
     panels: () => updateSafeArea(),
   });
 
@@ -150,6 +159,11 @@
     } else {
       const m = MT.Sim.moduleAt(state, t.c, t.r);
       if (m && !m.built) MT.Sim.cancel(state, m.id);
+      else if (m && m.damaged) { // damaged by a storm or meteors: order a repair
+        const r = MT.Sim.orderRepair(state, m.id);
+        ui.capcom(r.ok ? { level: 'info', title: `Repair ordered: ${MT.CONFIG.modules[m.type].name}`, text: 'One astronaut will go outside to fix it when someone is free.' }
+          : { level: 'warn', title: "Can't repair yet", text: r.why });
+      }
       else if (m && m.type === 'tower') { openTower(m); return; }
       else if (m) MT.Sim.toggle(state, m.id);
     }
@@ -164,7 +178,7 @@
     else if (e.key === 'h' || e.key === 'H') renderer.centerOnBase(state, true);
     else if (/^[1-9]$/.test(e.key) && +e.key <= MT.CONFIG.buildOrder.length) { const t = MT.CONFIG.buildOrder[+e.key - 1]; ui.select(ui.selected === t ? null : t); }
     else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      const panel = { s: 'supplies', b: 'build', w: 'why', c: 'capcom', l: 'log' }[e.key.toLowerCase()];
+      const panel = { s: 'supplies', b: 'build', a: 'ams', w: 'why', c: 'capcom', l: 'log' }[e.key.toLowerCase()];
       if (panel) ui.togglePanel(panel);
     }
   });
@@ -172,6 +186,13 @@
   // Astronomy Tower: pause the mission while the player looks at the picture, then resume.
   // The first tower shows today's picture; every other tower keeps its own random archive picture.
   function openTower(m) {
+    const entry = MT.Sim.enterTower(state, m.id);
+    if (!entry.ok) { ui.capcom({ level: 'warn', title: "Can't use the Astronomy Tower", text: entry.why }); return; }
+    if (entry.relief) {
+      const ev = { level: 'good', title: '🔭 New Astronomy Tower: stress goes down!', text: `The whole crew gathered for the first look through the new telescope. Everyone's stress dropped by ${MT.CONFIG.astro.stress.towerRelief}. (Each NEW tower does this once.)` };
+      ui.capcom(ev); ui.banner(ev);
+    }
+    refresh();
     const resume = speed; // stays paused if the player had paused
     setSpeed(0);
     ui.tooltip(state, null, false);

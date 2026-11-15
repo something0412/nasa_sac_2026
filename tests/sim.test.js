@@ -88,7 +88,7 @@ test('May 2024 storm radiation is the real LRO measurement, hour by hour', () =>
   // Real May 2024 was survivable even without the shelter, but the shelter still cuts the dose.
   const ignored = play('history', 1, goodSetup);
   assert.strictEqual(ignored.status, 'won');
-  assert.ok(ignored.dose < globalThis.MT.CONFIG.rad.limit / 2, 'dose ' + ignored.dose);
+  assert.ok(ignored.crew.every((a) => !a.medbay), 'nobody ends up in the medbay in May 2024: ' + ignored.crew.map((a) => Math.round(a.hp)).join(','));
 });
 
 test('training storms are copies of real recorded storms, and a big one needs the shelter', () => {
@@ -97,15 +97,164 @@ test('training storms are copies of real recorded storms, and a big one needs th
     assert.ok(st.storms.every((s) => s.profile && s.realName), 'seed ' + seed + ' uses real storm shapes');
     assert.strictEqual(st.storms.filter((s) => s.strong).length, 1, 'exactly one big storm');
     const ignored = play('training', seed, goodSetup);
-    assert.strictEqual(ignored.failure && ignored.failure.cause, 'radiation', 'seed ' + seed + ': ignoring a big storm is deadly');
+    const lost = ignored.failure && ignored.failure.cause === 'crew';
+    const best = Math.max(...ignored.crew.map((a) => a.hp));
+    assert.ok(lost || best < 40, `seed ${seed}: ignoring a big storm costs most of everyone's health (best ${Math.round(best)} HP)`);
   }
 });
 
-test('working outside during a big real storm is deadly', () => {
-  // Seed 5 gets a copy of the January 2012 storm at hour ~250.
-  const st = play('training', 5, goodSetup, (s) => { if (s.hour === 250) S.startBerm(s); });
-  assert.strictEqual(st.failure && st.failure.cause, 'radiation');
+test('working outside during a big real storm sends that astronaut to the medbay', () => {
+  // Seed 5 gets a copy of the January 2012 storm at hour ~250. One astronaut goes out to pile moon dirt.
+  let worker = null;
+  const st = play('training', 5, goodSetup, (s) => {
+    if (s.hour === 250) S.startBerm(s);
+    if (!worker) worker = s.crew.find((a) => a.job === 'berm') || null;
+  });
+  assert.ok(worker, 'someone took the shielding job');
+  assert.strictEqual(worker.medbay, true, worker.name + ' should be in the medbay');
   assert.ok(st.doseFrom.outside > 100, 'outside dose ' + st.doseFrom.outside);
+});
+
+// ---------------- Astronaut Management System ----------------
+test('crew: 4 named astronauts; each job gets exactly one, at most maxOutside outside', () => {
+  const C = globalThis.MT.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 3 });
+  assert.deepStrictEqual(st.crew.map((a) => a.name), ['Astronaut 1', 'Astronaut 2', 'Astronaut 3', 'Astronaut 4']);
+  build(st, 'solar', 'plain'); build(st, 'solar', 'plain'); build(st, 'battery', 'plain');
+  S.step(st);
+  const jobs = S.jobList(st);
+  const workers = st.crew.filter((a) => a.where === 'outside');
+  assert.strictEqual(workers.length, C.maxOutside);
+  assert.strictEqual(new Set(workers.map((a) => a.job)).size, workers.length, 'never two astronauts on one job');
+  assert.strictEqual(jobs.filter((j) => j.worker).length, C.maxOutside);
+  // A 6-crew-hour solar panel now takes 6 hours (one astronaut), not 3.
+  const first = st.modules.find((m) => m.type === 'solar' && !m.built);
+  for (let i = 0; i < 5; i++) S.step(st);
+  assert.strictEqual(first.built, true);
+});
+
+test('health: 600 mSv = all health, so living in the habitat lasts about 2 years', () => {
+  const C = globalThis.MT.CONFIG;
+  const hpPerDay = C.rad.surfacePerH * 24 * C.rad.hab * C.astro.hpPerMsv;
+  const days = 100 / hpPerDay;
+  assert.ok(days > 730 && days < 1000, 'habitat-only survival ~' + Math.round(days) + ' days');
+});
+
+test('medbay: astronauts with no health leave, stop eating, and the mission ends when none are left', () => {
+  const st = S.create({ scenario: 'training', seed: 2 });
+  goodSetup(st);
+  st.crew[0].wounds.push({ hp: 200, what: 'test' }); st.crew[0].injury = 200; // out of health
+  S.step(st);
+  assert.strictEqual(st.crew[0].medbay, true);
+  const before = st.stats.foodEaten;
+  S.step(st);
+  const eaten = st.stats.foodEaten - before;
+  assert.ok(Math.abs(eaten - globalThis.MT.CONFIG.use.foodPerPersonH * 3) < 1e-6, 'only 3 astronauts eat: ' + eaten);
+  for (const a of st.crew) { a.wounds.push({ hp: 200, what: 'test' }); a.injury = 200; }
+  S.step(st);
+  assert.strictEqual(st.status, 'lost');
+  assert.strictEqual(st.failure.cause, 'crew');
+  assert.ok(S.debrief(st).chain.some((c) => /medbay/.test(c.text)));
+});
+
+test('bones: a Fitness Center keeps them strong; without one astronauts get grounded', () => {
+  const B = globalThis.MT.CONFIG.astro.bone;
+  const withGym = play('history', 1, (s) => { goodSetup(s); build(s, 'gym', 'plain'); }, shelterBot);
+  const noGym = play('history', 1, goodSetup, shelterBot);
+  assert.ok(withGym.crew.every((a) => a.bone > 90), 'with gym: ' + withGym.crew.map((a) => Math.round(a.bone)).join(','));
+  assert.ok(noGym.crew.every((a) => a.bone < B.groundedBelow), 'no gym: ' + noGym.crew.map((a) => Math.round(a.bone)).join(','));
+  assert.ok(noGym.crew.some((a) => a.injuries > 0), 'weak bones cause small injuries');
+});
+
+test('bones: 50% fragile and 25% severe make injuries worse; 0% = medbay for good', () => {
+  const B = globalThis.MT.CONFIG.astro.bone;
+  const st = S.create({ scenario: 'training', seed: 7 });
+  const [a, b, c] = st.crew;
+  a.bone = B.fragileBelow - 1; b.bone = B.severeBelow - 1; c.bone = 0.01;
+  const stressA = a.stress, stressB = b.stress;
+  for (let i = 0; i < 200 && !(a.wounds.length && b.wounds.length); i++) { S.step(st); a.bone = Math.min(a.bone, B.fragileBelow - 1); b.bone = Math.min(b.bone, B.severeBelow - 1); }
+  assert.strictEqual(a.wounds[0].hp, B.injuryHp * B.fragileMult, 'fragile: bigger fractures');
+  assert.strictEqual(b.wounds[0].hp, B.injuryHp * B.severeMult, 'severe: even bigger');
+  assert.ok(a.stress > stressA && b.stress > stressB, 'worry adds stress');
+  assert.strictEqual(c.medbay, true);
+  assert.strictEqual(c.medbayWhy, 'bones');
+});
+
+test('medbay healing: 3 days, exactly 10 HP (smallest injuries first), never above the radiation limit, 2 uses per mission', () => {
+  const C = globalThis.MT.CONFIG, M = C.astro.medbay;
+  const st = S.create({ scenario: 'training', seed: 2 });
+  const [a, b, c] = st.crew;
+  a.dose = 120; // 20 HP of radiation damage: can never come back
+  a.wounds.push({ hp: 15, what: 'meteoroid hit' }, { hp: 5, what: 'sprain' }); a.injury = 20;
+  assert.strictEqual(S.startHeal(st, b.id).ok, false, 'no injuries = nothing to heal');
+  const r = S.startHeal(st, a.id);
+  assert.ok(r.ok); assert.strictEqual(r.amount, M.healHp, 'always heals 10');
+  S.step(st);
+  const before = S.maxHp(a) - 20;
+  assert.strictEqual(a.where, 'medbay');
+  assert.strictEqual(a.job, null);
+  for (let i = 1; i < M.healH; i++) { assert.ok(a.heal, 'still healing at hour ' + i); S.step(st); }
+  assert.strictEqual(a.heal, null, `done after ${M.healH} hours`);
+  assert.deepStrictEqual(a.wounds.map((w) => [w.what, Math.round(w.hp)]), [['meteoroid hit', 10]], 'sprain (5) gone first, then 5 off the meteoroid hit');
+  assert.ok(Math.abs(a.injury - 10) < 1e-6, 'exactly 10 HP healed: injuries 20 → 10');
+  assert.ok(a.hp > before && a.hp <= S.maxHp(a) + 1e-9 && S.maxHp(a) < 80, 'radiation sets the ceiling');
+  // Less than 10 HP of injuries: it heals up to the radiation limit, never past it.
+  b.wounds.push({ hp: 4, what: 'sprain' }); b.injury = 4;
+  assert.strictEqual(S.healAmount(b), 4);
+  // Only 2 treatments in the whole mission.
+  c.wounds.push({ hp: 4, what: 'sprain' }); c.injury = 4;
+  assert.ok(S.startHeal(st, b.id).ok);
+  assert.strictEqual(S.startHeal(st, c.id).ok, false, 'third treatment refused');
+  assert.strictEqual(st.medbayUses, M.uses);
+});
+
+test('stress: rises outside; the first look through each NEW tower lowers it once', () => {
+  const C = globalThis.MT.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 4 });
+  const t = freeTile(st, 'plain', 'tower');
+  const tower = S.place(st, 'tower', t.c, t.r).m;
+  while (!tower.built) S.step(st);
+  const builder = st.crew.find((a) => a.stress > 0);
+  assert.ok(builder && builder.stress >= C.astro.stress.outsidePerH * 5, 'building outside raised stress');
+  const before = builder.stress;
+  assert.strictEqual(S.enterTower(st, tower.id).relief, true);
+  assert.ok(builder.stress < before, 'first look lowers stress');
+  const after = builder.stress;
+  assert.strictEqual(S.enterTower(st, tower.id).relief, false, 'only the first look counts');
+  assert.strictEqual(builder.stress, after);
+});
+
+test('damage: half output until repaired; damaged towers cannot be entered; repair costs 1 part and 1 astronaut', () => {
+  const C = globalThis.MT.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 6 });
+  const t = freeTile(st, 'plain', 'tower');
+  const tower = S.place(st, 'tower', t.c, t.r).m;
+  while (!tower.built) S.step(st);
+  tower.damaged = true;
+  assert.strictEqual(S.enterTower(st, tower.id).ok, false);
+  const parts = st.res.parts;
+  assert.ok(S.orderRepair(st, tower.id).ok);
+  assert.strictEqual(st.res.parts, parts - C.damage.repairCost);
+  assert.strictEqual(S.orderRepair(st, tower.id).ok, false, 'no double repair');
+  S.step(st);
+  assert.strictEqual(st.crew.filter((a) => a.job === 'r' + tower.id).length, 1, 'exactly one astronaut repairs');
+  while (tower.damaged) S.step(st);
+  assert.strictEqual(S.enterTower(st, tower.id).ok, true);
+});
+
+test('meteor showers: forecast, then damage risk; May 2024 has the real Eta Aquariids', () => {
+  const h = S.create({ scenario: 'history', seed: 1 });
+  assert.strictEqual(h.meteors[0].name, 'Eta Aquariids');
+  for (let seed = 1; seed <= 5; seed++) assert.ok(S.create({ scenario: 'training', seed }).meteors.length >= 1);
+  const st = S.create({ scenario: 'history', seed: 1 });
+  let warned = false, active = false;
+  while (st.hour < h.meteors[0].h + 1) {
+    const ev = S.step(st);
+    if (ev.some((e) => /Meteor shower coming/.test(e.title))) warned = st.hour;
+    if (st.meteorOn) active = true;
+  }
+  assert.ok(warned && warned <= h.meteors[0].h - 4, 'forecast hours before it starts');
+  assert.ok(active);
 });
 
 test('each coming shadow is warned about exactly once', () => {

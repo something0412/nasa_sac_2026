@@ -73,7 +73,30 @@ html, body { height: 100%; overflow: hidden; }
 .bar[data-level=warn] .fill { background: var(--warn); }
 .bar[data-level=bad] .fill { background: var(--bad); }
 .bar[data-level=bad] .val { color: var(--bad); font-weight: 700; }
-.bar:nth-child(5) .fill { background: #c86bff; }
+.bar:nth-child(5) .fill { background: #ff7a9a; } /* crew health */
+/* Astronaut Management System (AMS) */
+#jobLine { white-space: pre-line; margin-top: 6px; }
+.ams { display: grid; gap: 6px; }
+.amsRow { background: rgba(10, 14, 22, 0.55); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.amsRow.gone { opacity: 0.55; }
+.amsHead { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.amsId { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: #0a0e16; color: var(--gold); font-size: 11px; font-weight: 700; }
+.amsWhere { font-size: 11px; color: var(--muted); margin: 2px 0 4px; }
+.amsStat { display: grid; grid-template-columns: 62px 1fr 26px; align-items: center; gap: 6px; font-size: 11px; }
+.amsStat b { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.amsStat .track { margin-top: 0; height: 6px; }
+.amsTop { font-size: 11px; color: var(--muted); }
+.amsTop b { color: var(--text); }
+/* Health bar: purple grows from the right = radiation damage that can never be healed */
+.hpTrack { position: relative; }
+.hpTrack .radCap { position: absolute; top: 0; right: 0; bottom: 0; background: #a35cff; transition: width 0.3s; }
+.healBtn { margin-top: 5px; width: 100%; font-size: 11px; padding: 4px 6px; background: #1d2a3f; border-color: #2f4a70; }
+.healBtn:hover { border-color: var(--accent); }
+.amsStat[data-level=warn] .fill { background: var(--warn); }
+.amsStat[data-level=bad] .fill { background: var(--bad); }
+.flag { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; }
+.flag.warn { color: var(--warn); }
+.flag.bad { color: var(--bad); }
 .bar:nth-child(5)[data-level=warn] .fill { background: var(--warn); }
 .bar:nth-child(5)[data-level=bad] .fill { background: var(--bad); }
 

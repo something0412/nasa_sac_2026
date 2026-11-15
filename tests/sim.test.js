@@ -133,10 +133,56 @@ test('crew: 4 named astronauts with roles; each job gets exactly one Engineer', 
   assert.deepStrictEqual(workers.map((a) => a.id), [1, 2], 'only the two Engineers go out');
   assert.strictEqual(new Set(workers.map((a) => a.job)).size, workers.length, 'never two astronauts on one job');
   assert.strictEqual(jobs.filter((j) => j.active).length, 2);
-  // A 6-crew-hour solar panel now takes 6 hours (one astronaut), not 3.
+  // A 6-crew-hour solar panel takes 6 hours of work (one astronaut, not 3), counted from when they reach it.
   const first = st.modules.find((m) => m.type === 'solar' && !m.built);
+  const walk = st.crew.find((a) => a.job === 'b' + first.id).walk.total;
+  assert.ok(walk > 0, 'they walk there first');
   for (let i = 0; i < 5; i++) S.step(st);
+  assert.strictEqual(first.built, false, 'not done 6 hours after leaving: the walk came first');
+  while (st.hour < Math.ceil(walk) + 6) S.step(st);
   assert.strictEqual(first.built, true);
+});
+
+test('walking: the Engineer walks from the HAB to the site, and the work only starts when they arrive', () => {
+  const C = globalThis.MT.CONFIG;
+  const st = S.create({ scenario: 'training', seed: 4 });
+  st.res.parts = 50;
+  const H = S.habs(st)[0];
+  // A spot about 18 squares from the HAB centre: 3 hours of walking at 6 squares an hour.
+  let spot = null;
+  for (let dc = 17; dc < 30 && !spot; dc++) for (const dr of [0, 1, -1, 2, -2]) if (!spot && S.canPlace(st, 'battery', H.c + 1 + dc, H.r + dr).ok) spot = { c: H.c + 1 + dc, r: H.r + dr };
+  if (!spot) for (let dc = 17; dc < 30 && !spot; dc++) for (const dr of [0, 1, -1, 2, -2]) if (!spot && S.canPlace(st, 'battery', H.c - dc, H.r + dr).ok) spot = { c: H.c - dc, r: H.r + dr };
+  assert.ok(spot, 'found a far spot');
+  const m = S.place(st, 'battery', spot.c, spot.r, 1).m, eng = st.crew[0];
+  const dist = Math.hypot(spot.c + 0.5 - (H.c + 1), spot.r + 0.5 - (H.r + 1));
+  S.step(st);
+  assert.strictEqual(eng.where, 'outside', 'they are outside (and exposed) while walking');
+  assert.ok(Math.abs(eng.walk.total - dist / C.walk.tilesPerH) < 1e-9, 'walk time = distance / walking speed');
+  const walkH = Math.ceil(eng.walk.total);
+  assert.strictEqual(walkH, 3);
+  for (let i = 1; i < walkH; i++) S.step(st);
+  assert.strictEqual(m.progress, 0, 'no work while still walking');
+  assert.ok(S.walkLeft(eng, st.hour - 1) > 0);
+  S.step(st);
+  assert.strictEqual(m.progress, 1, 'work starts once they are there');
+  const done = walkH + C.modules.battery.work;
+  while (!m.built && st.hour < 100) S.step(st);
+  assert.strictEqual(st.hour, done, 'built = walk + work hours');
+  // Next job straight from that site: the walk starts where they are, not at the HAB.
+  st.res.parts = 50;
+  let next = null;
+  for (let dr = 2; dr < 6 && !next; dr++) if (S.canPlace(st, 'battery', spot.c, spot.r + dr).ok) next = { c: spot.c, r: spot.r + dr };
+  const m2 = S.place(st, 'battery', next.c, next.r, 1).m;
+  S.step(st);
+  assert.ok(Math.abs(eng.walk.from.c - (spot.c + 0.5)) < 1e-9 && Math.abs(eng.walk.from.r - (spot.r + 0.5)) < 1e-9, 'walks on from the last site');
+  assert.ok(eng.walk.total < 1, 'a short walk this time');
+  assert.ok(!m2.built);
+  // Shelter: they go in; afterwards the walk starts again from the HAB.
+  const sh = freeTile(st, 'plain', 'shelter'); instant(st, 'shelter', sh.c, sh.r);
+  assert.ok(S.setShelter(st, true)); S.step(st);
+  assert.strictEqual(eng.walk, null);
+  S.setShelter(st, false); S.step(st);
+  assert.ok(Math.abs(eng.walk.from.c - (H.c + 1)) < 1e-9 && Math.abs(eng.walk.from.r - (H.r + 1)) < 1e-9, 'out of the HAB again');
 });
 
 test('health: 600 mSv = all health, so living in the habitat lasts about 2 years', () => {
@@ -534,9 +580,23 @@ test('HABs and Landing Pads are built (15 and 10 parts); pads must be close to a
   assert.ok(S.place(st, 'pad', p.c, p.r, 2).ok, 'next to HAB 1: fine');
 });
 
+/** Remove the starting Landing Pad (tests about building pads yourself). */
+function noPad(st) { st.modules = st.modules.filter((m) => m.type !== 'pad'); return st; }
+
+test('the starting base has a finished Landing Pad next to HAB 1, so the first spaceship can land on it', () => {
+  const st = S.create({ scenario: 'training', seed: 1 });
+  const pads = st.modules.filter((m) => m.type === 'pad');
+  assert.strictEqual(pads.length, 1);
+  assert.ok(pads[0].built);
+  assert.strictEqual(S.homeForPad(st, pads[0].id), S.habs(st)[0]);
+  const seen = untilShip(st);
+  assert.ok(seen.events[0].ship, 'it landed without building anything');
+  assert.deepStrictEqual(seen.events[0].pads, [pads[0].id]);
+});
+
 test('crew spaceship: lands only on a Landing Pad next to a finished HAB; the player picks jobs and the home HAB', () => {
   const E = globalThis.MT.CONFIG.endless;
-  const st = S.create({ scenario: 'training', seed: 1 });
+  const st = noPad(S.create({ scenario: 'training', seed: 1 }));
   st.medbayUses = 2;
   const H1 = S.habs(st)[0], p = padSpot(st, H1);
   instant(st, 'pad', p.c, p.r);
@@ -557,7 +617,7 @@ test('crew spaceship: lands only on a Landing Pad next to a finished HAB; the pl
 
 test('Landing Pads: no two within the same radius; landing on a pad makes its closest HAB the home of the new crew', () => {
   const C = globalThis.MT.CONFIG;
-  const st = S.create({ scenario: 'training', seed: 4 });
+  const st = noPad(S.create({ scenario: 'training', seed: 4 }));
   const H1 = S.habs(st)[0], p1 = padSpot(st, H1);
   const P1 = instant(st, 'pad', p1.c, p1.r);
   st.res.parts = 100;
@@ -577,7 +637,7 @@ test('Landing Pads: no two within the same radius; landing on a pad makes its cl
 });
 
 test('crew spaceship: no Landing Pad next to a finished HAB = it turns back (no crew, no medbay restock)', () => {
-  const st = S.create({ scenario: 'training', seed: 1 });
+  const st = noPad(S.create({ scenario: 'training', seed: 1 }));
   st.medbayUses = 2;
   const seen = untilShip(st);
   assert.match(seen.warnText, /needs a Landing Pad/, 'the warning tells you to build one');
@@ -586,7 +646,7 @@ test('crew spaceship: no Landing Pad next to a finished HAB = it turns back (no 
   assert.strictEqual(st.pendingCrew, 0);
   assert.strictEqual(st.medbayUses, 2, 'no restock');
   // A pad next to an UNFINISHED HAB does not count either.
-  const st2 = S.create({ scenario: 'training', seed: 2 });
+  const st2 = noPad(S.create({ scenario: 'training', seed: 2 }));
   const s = farHab(st2);
   st2.res.parts = 100;
   const H = S.place(st2, 'hab', s.c, s.r, 1).m; // still being built
@@ -654,8 +714,9 @@ test('rover: fully shielded, so riders get no radiation even during a strong sto
   assert.strictEqual(rider.homeId, H2.id);
 });
 
-test('cargo: building parts give 20', () => {
-  assert.strictEqual(globalThis.MT.CONFIG.cargoOptions.parts.give.parts, 20);
+test('parts: the base starts with 25, and a cargo of building parts gives 30', () => {
+  assert.strictEqual(globalThis.MT.CONFIG.cargoOptions.parts.give.parts, 30);
+  assert.strictEqual(S.create({ scenario: 'training', seed: 1 }).res.parts, 25);
 });
 
 test('meteor showers: forecast, then damage risk; May 2024 has the real Eta Aquariids', () => {
@@ -781,6 +842,27 @@ test('building rules', () => {
   const r = S.place(st, 'solar', ridge.c, ridge.r);
   assert.ok(S.cancel(st, r.m.id));
   assert.strictEqual(st.res.parts, before, 'cancel refunds parts');
+});
+
+test('cancel halfway through building: full refund, the Engineer is free again, built things cannot be cancelled', () => {
+  const st = S.create({ scenario: 'training', seed: 2 });
+  const t = freeTile(st, 'plain', 'solar');
+  const before = st.res.parts;
+  const r = S.place(st, 'solar', t.c, t.r, 1);
+  assert.strictEqual(st.res.parts, before - globalThis.MT.CONFIG.modules.solar.cost);
+  S.step(st); S.step(st);
+  assert.ok(r.m.progress > 0 && !r.m.built, 'work has started');
+  assert.strictEqual(st.crew[0].where, 'outside');
+  assert.ok(S.cancel(st, r.m.id));
+  assert.strictEqual(st.res.parts, before, 'all parts back, even after work started');
+  assert.ok(!st.modules.includes(r.m), 'the site is gone');
+  assert.strictEqual(S.cancel(st, r.m.id), false, 'cannot cancel twice');
+  S.step(st);
+  assert.notStrictEqual(st.crew[0].where, 'outside', 'the Engineer goes back inside');
+  assert.strictEqual(st.crew[0].job, null);
+  const H = S.habs(st)[0], p0 = st.res.parts;
+  assert.strictEqual(S.cancel(st, H.id), false, 'finished buildings cannot be cancelled');
+  assert.strictEqual(st.res.parts, p0);
 });
 
 test('light fades gradually and solar power follows it', () => {

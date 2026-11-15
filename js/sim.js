@@ -241,6 +241,7 @@
     addModule(state, 'battery', B.c + 3, B.r, true);
     addModule(state, 'o2gen', B.c + 3, B.r + 1, true);
     addModule(state, 'greenhouse', B.c, B.r + 3, true);
+    addModule(state, 'pad', B.c, B.r - 4, true); // where the crew landed: the next spaceships can land here too
     state.res.battery = Math.min(state.res.battery, batteryCap(state));
     updatePower(state, 0, true);
     return state;
@@ -293,6 +294,37 @@
       j.active = !!(j.worker && j.worker.job === j.key && j.worker.where === 'outside'); // being worked on this hour
     });
     return list.sort((a, b) => a.seq - b.seq);
+  }
+  // ----- walking to a job site -----
+  // a.walk = { key, from:{c,r}, to:{c,r}, startH, total }: the walk to job `key` started at hour startH and takes
+  // `total` hours (distance / walking speed). Work only counts once they are there.
+  const midOf = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
+  const walkAt = (w, t) => { const p = w.total > 0 ? Math.max(0, Math.min(1, (t - w.startH) / w.total)) : 1; return { c: w.from.c + (w.to.c - w.from.c) * p, r: w.from.r + (w.to.r - w.from.r) * p }; };
+  /** Start (or keep) the walk of every Engineer who is outside on a job this hour. */
+  function updateWalks(state, jobs, h) {
+    for (const a of activeCrew(state)) {
+      if (a.where !== 'outside' || !a.job) { a.walk = null; continue; } // inside (or busy elsewhere): the next walk starts at their HAB
+      if (a.walk && a.walk.key === a.job) continue;
+      const j = jobs.find((x) => x.key === a.job);
+      const from = a.walk ? walkAt(a.walk, h) : midOf(homeOf(state, a)); // straight from the last site, or out of their HAB
+      const to = midOf(j.m); // (moon-dirt shield: the HAB itself)
+      a.walk = { key: a.job, from, to, startH: h, total: Math.hypot(to.c - from.c, to.r - from.r) / cfg().walk.tilesPerH };
+    }
+  }
+  /** Whole hours of walking before the work starts: the work begins at the first full hour after they arrive
+   *  (the progress bar moves once per hour, so it never moves while they are still on the way). */
+  const walkHours = (w) => Math.ceil(w.total - 1e-9);
+  /** Does this astronaut work at the site during hour h (1) or are they still walking there (0)? */
+  const workShare = (a, h) => (a.walk && h < a.walk.startH + walkHours(a.walk) ? 0 : 1);
+  /** Hours of walking left at time t (game hours), or 0 once they are at the site. */
+  const walkLeft = (a, t) => (a.walk && a.where === 'outside' ? Math.max(0, a.walk.startH + a.walk.total - t) : 0);
+  /** Where a walking astronaut is (tile coordinates, for drawing), or null if they are not on the way.
+   *  frac = how far into the current hour the clock is; step(h) covers h..h+1, and after it state.hour is h + 1. */
+  function walkPoint(state, a, frac) {
+    const t = state.hour - 1 + (frac || 0);
+    if (!walkLeft(a, t)) return null;
+    const p = walkAt(a.walk, t), dc = a.walk.to.c - a.walk.from.c, dr = a.walk.to.r - a.walk.from.r;
+    return { c: p.c, r: p.r, dc, dr };
   }
   /** Only working OUTSIDE is unprotected (full radiation). Every building (Research Bay, greenhouse, tower,
    *  gym, medbay) counts as the habitat; the shelter blocks the most. */
@@ -974,7 +1006,7 @@
     const say = (level, title, text, extra) => { log(state, level, title + (text ? ' — ' + text : '')); ev.push({ level, title, text, ...extra }); };
 
     extendWorld(state);
-    if (h === 0) say('info', 'CAPCOM: Welcome to Zain Base', `Keep the base running as long as you can. A crew spaceship brings a new HAB and ${C.endless.newCrew} astronauts every ${C.endless.shipEveryH / 24} days. Watch the sunlight forecast: the Sun circles the horizon here, so shadows move.`);
+    if (h === 0) say('info', 'CAPCOM: Welcome to Zain Base', `Keep the base running as long as you can. A crew spaceship brings ${C.endless.newCrew} astronauts every ${C.endless.shipEveryH / 24} days (it needs a Landing Pad next to a HAB). Watch the sunlight forecast: the Sun circles the horizon here, so shadows move.`);
 
     // Darkness forecast for zones where we have solar panels.
     for (const z of ['plain', 'ridge']) {
@@ -1047,12 +1079,15 @@
     // Crew: who is where this hour (shelter, Fitness Center, outside on a job, or in the habitat).
     assignCrew(state, say);
     // Construction and repairs: each job has exactly one Engineer. Stressed astronauts work at half speed.
+    // The Engineer first walks from their HAB to the site: the work only starts once they get there.
     const jobs = jobList(state);
+    updateWalks(state, jobs, h);
     for (const a of activeCrew(state)) {
       if (a.where !== 'outside') continue;
       const j = jobs.find((x) => x.key === a.job);
       if (!j) continue;
-      const work = isSlow(a) ? C.astro.stress.slowFactor : 1;
+      const work = (isSlow(a) ? C.astro.stress.slowFactor : 1) * workShare(a, h);
+      if (!work) continue; // still walking there
       if (j.kind === 'module') {
         j.m.progress += work;
         if (j.m.progress >= j.total) { j.m.built = true; a.job = null; say('good', `Built: ${C.modules[j.m.type].name}`, `${a.name} finished it.`); }
@@ -1471,6 +1506,7 @@
 
   MT.Sim = {
     upcoming, stormRateAt,
+    walkPoint, walkLeft,
     create, step, canPlace, place, cancel, toggle, setShelter, startBerm, chooseCargo, orderRepair, startHeal, healAmount, maxHp,
     useTower, towerReadyIn, startResearch, resumeTask, researchCost, plannedLevel, tendGreenhouse, sendToGym, assignWorker, boostOf, inLabRange, solarKw,
     causeChains, debrief, moduleAt, zoneOf, sunAz, zoneLight, zoneLitAt, jobList, activeCrew, allCrew, crewById, crewSummary, isSlow, isGrounded, isExposed,

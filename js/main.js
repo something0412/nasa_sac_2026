@@ -109,7 +109,10 @@
     // no new astronauts or HAB to place). The clock starts when it has landed.
     busy = true;
     setSpeed(0);
-    ui.playLanding(() => { busy = false; setSpeed(1); }, '🚀 Your crew has landed at Zain Base!');
+    const pad = state.modules.find((m) => m.type === 'pad'); // it touches down on the starting Landing Pad
+    renderer.centerOnBase(state, false);
+    const at = pad ? renderer.screenOf(pad.c + pad.w / 2, pad.r + pad.h / 2) : null;
+    ui.playLanding(() => { busy = false; setSpeed(1); }, '🚀 Your crew has landed at Zain Base!', at);
   }
 
   function menu() {
@@ -255,14 +258,19 @@
       if (!res.ok) warn("Can't build here", res.why);
       else if (!e.shiftKey && state.res.parts < C.modules[ui.selected].cost) ui.select(null);
     } else {
-      // Clicking an astronaut on the map picks them.
-      const who = renderer.crewAt(e);
-      if (who) { ui.selectCrew(ui.selectedCrew === who ? null : who); refresh(); return; }
       const m = MT.Sim.moduleAt(state, t.c, t.r);
       const name = m && C.modules[m.type].name;
+      // Clicking an astronaut on the map picks them, except on a job site (building or repair with an Engineer picked):
+      // the Engineer working there stands right on top of it, so the click must reach the site to cancel or reassign it.
+      const site = m && (!m.built || (m.damaged && a && a.role === 'engineer'));
+      const who = !site && renderer.crewAt(e);
+      if (who) { ui.selectCrew(ui.selectedCrew === who ? null : who); refresh(); return; }
       if (!m) { /* empty ground */ }
       else if (!m.built) { // building site: picked Engineer takes over the job; nobody picked = cancel (parts back)
-        if (!a) MT.Sim.cancel(state, m.id);
+        if (!a) {
+          const cost = C.modules[m.type].cost;
+          if (MT.Sim.cancel(state, m.id)) info(`❌ Cancelled: ${name}`, `${cost} part${cost === 1 ? '' : 's'} back (you have ${state.res.parts}).`);
+        }
         else { const r = MT.Sim.assignWorker(state, m.id, a.id); r.ok ? info(`👷 ${a.name} will build the ${name}`, 'Each job has exactly one Engineer.') : warn("Can't give this job", r.why); }
       }
       else if (m.type === 'hab') {

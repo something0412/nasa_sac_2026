@@ -184,6 +184,8 @@
       for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
       return lo.slice(0, -1).concat(up.slice(0, -1));
     }
+    // How long each building's shadow is (pixels, before the low-Sun stretch): taller things cast longer shadows.
+    const SHADOW_LEN = { hab: 38, solar: 34, drill: 26, tower: 24, lab: 20 };
     const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
     const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
@@ -215,111 +217,154 @@
           break;
         }
         case 'solar': {
-          const L = lightAt(state, m);
-          ctx.fillStyle = '#555'; ctx.fillRect(cx - 3, cy - 3, 6, 6);
-          const s = sunVec(state);
-          ctx.translate(cx, cy); ctx.rotate(Math.atan2(s.y, s.x) + Math.PI / 2); // panel turns to face the Sun
-          ctx.fillStyle = rgb(mix([29, 44, 72], [47, 111, 214], L));
-          ctx.fillRect(-16, -5, 32, 10);
-          ctx.strokeStyle = rgb(mix([58, 74, 102], [156, 195, 255], L)); ctx.lineWidth = 1;
-          for (let i = -16; i <= 16; i += 8) { ctx.beginPath(); ctx.moveTo(i, -5); ctx.lineTo(i, 5); ctx.stroke(); }
-          ctx.strokeRect(-16, -5, 32, 10);
-          if (L > 0.3 && m.built && m.on) { ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.25 * Math.sin(time * 3 + m.id)) * L})`; ctx.fillRect(-16, -5, 8, 10); }
+          // Tall panel on a mast (like NASA's VSAT arrays), seen from above edge-on. It turns to face the low Sun.
+          const L = lightAt(state, m), sv = sunVec(state);
+          ctx.strokeStyle = '#7f8896'; ctx.fillStyle = '#7f8896'; ctx.lineWidth = 2;
+          for (let k = 0; k < 3; k++) { // tripod feet
+            const a = 0.5 + (k * Math.PI * 2) / 3, fx = cx + Math.cos(a) * 11, fy = cy + Math.sin(a) * 11;
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(fx, fy); ctx.stroke();
+            ctx.beginPath(); ctx.arc(fx, fy, 1.8, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.save(); ctx.translate(cx, cy); ctx.rotate(Math.atan2(sv.y, sv.x) + Math.PI / 2); // local -y = towards the Sun
+          ctx.fillStyle = '#5a6170'; ctx.fillRect(-18, -0.5, 36, 3); // back of the panel
+          ctx.fillStyle = rgb(mix([29, 44, 72], [47, 111, 214], L)); ctx.fillRect(-18, -4, 36, 3.5); // sunny face
+          ctx.strokeStyle = '#dfe5ec'; ctx.lineWidth = 1; ctx.strokeRect(-18, -4, 36, 6.5);
+          ctx.strokeStyle = rgb(mix([58, 74, 102], [140, 180, 245], L)); ctx.beginPath();
+          for (let i = -9; i <= 9; i += 9) { ctx.moveTo(i, -4); ctx.lineTo(i, -0.5); }
+          ctx.stroke();
+          if (L > 0.3 && m.built && m.on) { ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.25 * Math.sin(time * 3 + m.id)) * L})`; ctx.fillRect(-18, -4, 8, 3.5); }
+          ctx.restore();
+          ctx.fillStyle = '#dfe5ec'; ctx.beginPath(); ctx.arc(cx, cy, 3.2, 0, Math.PI * 2); ctx.fill(); // mast seen from above
+          ctx.strokeStyle = '#596273'; ctx.lineWidth = 1; ctx.stroke();
           break;
         }
         case 'battery': {
+          // Dark battery box on a skid, two white heat radiators on top, 4 charge lights.
           const cap = MT.Sim.batteryCap(state) || 1;
-          const f = state.res.battery / cap;
-          ctx.fillStyle = '#2a2f38'; ctx.fillRect(x + 8, y + 7, 24, 28);
-          ctx.fillStyle = '#596273'; ctx.fillRect(x + 15, y + 4, 10, 4);
-          ctx.fillStyle = f < 0.2 ? '#ff5d5d' : f < 0.5 ? '#ffc04d' : '#5fe08a';
-          if (m.built) ctx.fillRect(x + 11, y + 32 - 22 * f, 18, 22 * f);
-          ctx.strokeStyle = '#8a93a3'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 8, y + 7, 24, 28);
+          const f = Math.max(0, Math.min(1, state.res.battery / cap));
+          ctx.fillStyle = '#4b5361'; ctx.beginPath(); ctx.roundRect(x + 5, y + 5, 30, 30, 3); ctx.fill();
+          ctx.fillStyle = '#2a2f38'; ctx.fillRect(x + 8, y + 8, 24, 24);
+          ctx.strokeStyle = '#8a93a3'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 8, y + 8, 24, 24);
+          ctx.fillStyle = '#e9edf2'; ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 1;
+          for (const fx of [14, 23]) { ctx.fillRect(x + fx, y + 6, 3.5, 21); ctx.strokeRect(x + fx, y + 6, 3.5, 21); }
+          const lit = m.built ? Math.ceil(f * 4 - 0.01) : 0, col = MT.Shapes.chargeColor(f);
+          for (let i = 0; i < 4; i++) { ctx.fillStyle = i < lit ? col : '#3a414d'; ctx.fillRect(x + 10 + i * 5.3, y + 28.5, 4.2, 2.5); }
+          MT.Shapes.bolt(ctx, x + 20.2, y + 16.5, 1, '#ffd36b');
           break;
         }
         case 'o2gen': {
-          ctx.fillStyle = '#c9d3df'; ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI * 2); ctx.fill();
-          ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 2; ctx.stroke();
-          ctx.fillStyle = on && !m.noWater ? '#58c4ff' : '#59636f';
-          ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; ctx.fillText('O₂', cx, cy + 4);
-          if (on && !m.noWater && Math.random() < 0.15) spawn(2, cx + (Math.random() - 0.5) * 12, cy - 8, 0, -12, 1.2, '#9fe0ff');
+          // Water splitter (like the ISS oxygen generator) and a round O2 tank. Blue pipe = water coming in.
+          const wet = on && !m.noWater;
+          ctx.fillStyle = 'rgba(89,99,115,0.75)'; ctx.beginPath(); ctx.roundRect(x + 5, y + 5, 30, 30, 4); ctx.fill();
+          ctx.strokeStyle = wet ? '#58c4ff' : '#59636f'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(x + 5, y + 33); ctx.lineTo(x + 11, y + 27); ctx.stroke();
+          ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x + 19, y + 18); ctx.lineTo(x + 25, y + 13); ctx.stroke();
+          ctx.beginPath(); ctx.arc(x + 15, y + 23, 9, 0, Math.PI * 2); ctx.fillStyle = '#d6dee8'; ctx.fill(); ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.beginPath(); ctx.arc(x + 15, y + 23, 6, 0, Math.PI * 2); ctx.strokeStyle = wet ? '#58c4ff' : '#59636f'; ctx.lineWidth = 2; ctx.stroke();
+          ctx.fillStyle = '#9aa2af'; ctx.beginPath(); ctx.arc(x + 15, y + 23, 2.5, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(x + 28, y + 11, 6.8, 0, Math.PI * 2); ctx.fillStyle = '#f2f4f7'; ctx.fill(); ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 1; ctx.stroke();
+          ctx.fillStyle = wet ? '#2f8fd0' : '#59636f'; ctx.font = 'bold 7px system-ui'; ctx.textAlign = 'center'; ctx.fillText('O₂', x + 28, y + 13.5);
+          if (wet && Math.random() < 0.15) spawn(2, x + 15 + (Math.random() - 0.5) * 6, y + 20, 0, -12, 1.2, '#9fe0ff');
           break;
         }
         case 'greenhouse': {
-          ctx.fillStyle = on ? 'rgba(255,120,220,0.25)' : 'rgba(80,90,100,0.4)';
-          ctx.fillRect(x + 3, y + 3, w - 6, h - 6);
-          ctx.strokeStyle = on ? '#ff9de8' : '#6b7480'; ctx.lineWidth = 2; ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
-          for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+          // Inflatable tunnel with rounded ends and pink-purple grow lights; airlock on the right-hand end.
+          ctx.fillStyle = on ? 'rgba(255,120,220,0.22)' : 'rgba(80,90,100,0.4)';
+          ctx.beginPath(); ctx.roundRect(x + 3, y + 9, 34, 22, 11); ctx.fill();
+          for (const ry of [15.5, 24.5]) for (const rx of [11, 17.5, 24, 30.5]) {
             ctx.fillStyle = on ? '#4fdc6a' : '#3c6b45';
-            ctx.beginPath(); ctx.arc(x + 11 + i * 9, y + 11 + j * 9, on ? 3.3 + Math.sin(time * 2 + i + j) * 0.4 : 2.4, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(x + rx, y + ry, on ? 2.9 + Math.sin(time * 2 + rx + ry) * 0.3 : 2.2, 0, Math.PI * 2); ctx.fill();
           }
+          ctx.strokeStyle = on ? 'rgba(255,170,235,0.8)' : 'rgba(140,150,160,0.7)'; ctx.lineWidth = 1; ctx.beginPath();
+          for (const rx of [14, 20, 26]) { ctx.moveTo(x + rx, y + 9); ctx.lineTo(x + rx, y + 31); } // ribs
+          ctx.stroke();
+          ctx.strokeStyle = on ? '#ff9de8' : '#6b7480'; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(x + 3, y + 9, 34, 22, 11); ctx.stroke();
+          ctx.fillStyle = '#aeb5c1'; ctx.fillRect(x + 35, y + 16.5, 4, 7); ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1; ctx.strokeRect(x + 35, y + 16.5, 4, 7); // airlock
           break;
         }
         case 'drill': {
-          ctx.strokeStyle = '#e0b860'; ctx.lineWidth = 2.5;
-          ctx.beginPath(); ctx.moveTo(cx, y + 6); ctx.lineTo(x + 7, y + 34); ctx.moveTo(cx, y + 6); ctx.lineTo(x + 33, y + 34); ctx.stroke();
-          ctx.translate(cx, cy + 6); ctx.rotate(on ? time * 8 : 0);
-          ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.stroke();
-          if (on && Math.random() < 0.25) spawn(1, cx, cy + 10, (Math.random() - 0.5) * 30, -Math.random() * 15, 0.9, 'rgba(190,220,255,0.8)');
+          // Tracked drill rig (like the TRIDENT ice drill): mast on the right, auger hole with ice chips, water tank.
+          ctx.fillStyle = '#30343b'; ctx.fillRect(x + 4, y + 6, 26, 4); ctx.fillRect(x + 4, y + 30, 26, 4); // tracks
+          ctx.fillStyle = '#e0b860'; ctx.fillRect(x + 6, y + 9, 22, 22); ctx.strokeStyle = '#8a6d2c'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 6, y + 9, 22, 22);
+          ctx.fillStyle = '#3f8fd0'; ctx.beginPath(); ctx.arc(x + 14, y + 17, 5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#7fc4ff'; ctx.lineWidth = 1; ctx.stroke();
+          ctx.fillStyle = 'rgba(205,228,255,0.85)'; ctx.beginPath(); ctx.ellipse(x + 35, y + 21, 4.5, 8, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#4b5361'; ctx.fillRect(x + 24, y + 13, 7, 14); ctx.strokeStyle = '#e0b860'; ctx.strokeRect(x + 24, y + 13, 7, 14);
+          ctx.beginPath(); ctx.moveTo(x + 24, y + 13); ctx.lineTo(x + 31, y + 20); ctx.lineTo(x + 24, y + 27); ctx.stroke();
+          ctx.translate(x + 35, y + 20); ctx.rotate(on ? time * 8 : 0.4);
+          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(4, 0); ctx.stroke();
+          if (on && Math.random() < 0.25) spawn(1, x + 35, y + 20, (Math.random() - 0.5) * 30, -Math.random() * 15, 0.9, 'rgba(190,220,255,0.8)');
           break;
         }
         case 'shelter': {
-          ctx.fillStyle = '#8a7558'; ctx.beginPath(); ctx.ellipse(cx, cy + 4, 17, 13, 0, Math.PI, 0); ctx.lineTo(cx + 17, cy + 10); ctx.lineTo(cx - 17, cy + 10); ctx.fill();
-          ctx.fillStyle = '#2b2b2b'; ctx.fillRect(cx - 4, cy + 1, 8, 9);
-          ctx.strokeStyle = '#b39a77'; ctx.lineWidth = 1.5; ctx.stroke();
+          // Mound of moon-dirt bags with an entry tunnel and a radiation sign.
+          const sy = cy - 2;
+          ctx.fillStyle = '#aeb5c1'; ctx.fillRect(cx - 4, sy + 9, 8, 10); ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1; ctx.strokeRect(cx - 4, sy + 9, 8, 10);
+          ctx.fillStyle = '#2b2b2b'; ctx.fillRect(cx - 3, sy + 17, 6, 2.5);
+          ctx.fillStyle = '#8a7558'; ctx.beginPath(); ctx.ellipse(cx, sy, 16, 13.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#b39a77'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.setLineDash([5, 2]); ctx.strokeStyle = 'rgba(60,45,30,0.55)'; ctx.lineWidth = 2.5; // rows of bags
+          ctx.beginPath(); ctx.ellipse(cx, sy, 12.5, 10, 0, 0, Math.PI * 2); ctx.stroke();
+          ctx.beginPath(); ctx.ellipse(cx, sy, 8, 6.3, 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+          MT.Shapes.trefoil(ctx, cx, sy, 3.6);
           if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', cx, y + 7); }
           break;
         }
         case 'gym': {
-          // Floor mat with a dumbbell. It bounces when someone is training.
+          // Pressurized module on two cradles, blue roof stripe, dumbbell sign (bounces, orange, while someone trains).
           const training = state.crew.some((a) => a.where === 'gym' && a.gymId === m.id);
-          ctx.fillStyle = '#2f3a4c'; ctx.beginPath(); ctx.roundRect(x + 5, y + 7, w - 10, h - 14, 6); ctx.fill();
-          ctx.strokeStyle = on && !m.damaged ? '#7fb4ff' : '#59636f'; ctx.lineWidth = 1.5; ctx.stroke();
-          const lift = training ? Math.abs(Math.sin(time * 4)) * 5 : 0;
-          ctx.translate(cx, cy + 2 - lift);
-          ctx.fillStyle = '#c9d3df'; ctx.fillRect(-9, -1.5, 18, 3);
-          ctx.fillStyle = training ? '#ffd36b' : '#8a93a3';
-          ctx.fillRect(-13, -6, 4, 12); ctx.fillRect(9, -6, 4, 12);
+          ctx.fillStyle = '#3a414d'; ctx.fillRect(x + 10, y + 9, 5, 22); ctx.fillRect(x + 25, y + 9, 5, 22); // cradles
+          ctx.fillStyle = '#d9dde4'; ctx.beginPath(); ctx.roundRect(x + 3, y + 12, 34, 16, 8); ctx.fill(); ctx.strokeStyle = '#8f96a3'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.fillStyle = on && !m.damaged ? '#7fb4ff' : '#59636f'; ctx.fillRect(x + 8, y + 18.5, 24, 3);
+          ctx.strokeStyle = '#8f96a3'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x + 6.5, y + 20, 3, 0, Math.PI * 2); ctx.moveTo(x + 36.5, y + 20); ctx.arc(x + 33.5, y + 20, 3, 0, Math.PI * 2); ctx.stroke(); // end hatches
+          const lift = training ? 1 + Math.abs(Math.sin(time * 4)) * 0.25 : 1;
+          ctx.fillStyle = 'rgba(10,14,22,0.35)'; ctx.beginPath(); ctx.ellipse(x + 20, y + 20, 8, 3, 0, 0, Math.PI * 2); ctx.fill();
+          MT.Shapes.dumbbell(ctx, x + 20, y + 20, 0.9 * lift, training ? '#ffb35c' : '#eef1f5');
           break;
         }
         case 'tower': {
-          // Square base, white observatory dome with an open slit, and a telescope that slowly sweeps the sky.
-          ctx.fillStyle = '#4b5361'; ctx.fillRect(x + 9, cy + 2, w - 18, 14);
-          ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 9, cy + 2, w - 18, 14);
-          ctx.fillStyle = '#e4e8ee'; ctx.beginPath(); ctx.arc(cx, cy + 2, 12, Math.PI, 0); ctx.closePath(); ctx.fill();
-          ctx.strokeStyle = '#9aa2af'; ctx.stroke();
+          // Small observatory: round drum, white dome with an open slit, telescope that slowly sweeps the sky.
+          ctx.fillStyle = '#2b313c'; ctx.fillRect(cx - 3, cy + 12, 6, 4); // door porch
+          ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI * 2); ctx.fillStyle = '#4b5361'; ctx.fill(); ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx, cy, 11.5, 0, Math.PI * 2); ctx.fillStyle = '#e4e8ee'; ctx.fill(); ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 1; ctx.stroke();
           const sweep = m.built ? Math.sin(time * 0.6 + m.id) * 0.5 : 0;
-          ctx.save(); ctx.translate(cx, cy - 2); ctx.rotate(sweep);
-          ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
-          ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
+          ctx.save(); ctx.translate(cx, cy); ctx.rotate(sweep);
+          ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.6, -11.5, 5.2, 11.5); // slit
+          ctx.fillStyle = '#f2f4f7'; ctx.fillRect(-1.6, -15, 3.2, 9); ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.6, -16, 3.2, 2.5); // telescope
           ctx.restore();
-          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 7, y + 7, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
           break;
         }
         case 'pad': {
-          // Landing Pad: round platform with an "H" and corner lights (blinking = ready for a spaceship).
+          // Landing Pad of baked moon dirt: blast berm on the side facing the nearest HAB, scorch mark, target ring,
+          // beacons (blinking green = ready for a spaceship).
           const ready = m.built && MT.Sim.landingSpots(state).some((sp) => sp.pad === m);
-          ctx.fillStyle = '#5d5f66'; ctx.beginPath(); ctx.arc(cx, cy, 34, 0, Math.PI * 2); ctx.fill();
-          ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 2; ctx.stroke();
-          ctx.strokeStyle = '#d9dde4'; ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.arc(cx, cy, 26, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-          ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 24px system-ui'; ctx.textAlign = 'center'; ctx.fillText('H', cx, cy + 8);
+          const H = MT.Sim.habs(state).map(center).reduce((b, p) => (!b || Math.hypot(p.x - cx, p.y - cy) < Math.hypot(b.x - cx, b.y - cy) ? p : b), null);
+          const face = H ? Math.atan2(H.y - cy, H.x - cx) : -Math.PI / 2;
+          ctx.beginPath(); ctx.arc(cx, cy, 36, face - Math.PI * 0.42, face + Math.PI * 0.42); ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 6; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx, cy, 36, face - Math.PI * 0.42, face + Math.PI * 0.42); ctx.strokeStyle = '#b39a77'; ctx.lineWidth = 1.2; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx, cy, 32, 0, Math.PI * 2); ctx.fillStyle = '#5d5f66'; ctx.fill(); ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 2; ctx.stroke();
+          ctx.fillStyle = 'rgba(20,20,26,0.28)'; ctx.beginPath(); ctx.arc(cx, cy, 19, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(cx, cy, 11, 0, Math.PI * 2); ctx.fill(); // scorch
+          ctx.strokeStyle = '#d9dde4'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.arc(cx, cy, 26, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+          ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(cx, cy, 13, 0, Math.PI * 2); ctx.stroke();
+          ctx.beginPath(); for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(cx + dx * 16, cy + dy * 16); ctx.lineTo(cx + dx * 22, cy + dy * 22); } ctx.stroke();
+          ctx.fillStyle = '#ffd36b'; ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
           for (let k = 0; k < 4; k++) {
             const a = Math.PI / 4 + (k * Math.PI) / 2;
             ctx.fillStyle = ready ? (blink ? '#5fe08a' : '#2e6b43') : '#59636f';
-            ctx.beginPath(); ctx.arc(cx + Math.cos(a) * 31, cy + Math.sin(a) * 31, 2.5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(cx + Math.cos(a) * 30, cy + Math.sin(a) * 30, 2.8, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#2b313c'; ctx.lineWidth = 1; ctx.stroke();
           }
           break;
         }
         case 'lab': {
-          // Low lab module with a round window; a flask glows (and bubbles) while the Scientist is researching.
+          // Lab block with a stepped roof, dish antenna and sensor mast; the flask glows (and bubbles) while the Scientist works.
           const busy = state.crew.some((a) => !a.medbay && a.task && a.task.kind === 'lab' && a.task.id === m.id);
-          ctx.fillStyle = '#cfd6e0'; ctx.beginPath(); ctx.roundRect(x + 6, y + 10, w - 12, h - 18, 5); ctx.fill();
-          ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 1.5; ctx.stroke();
-          ctx.fillStyle = '#26303f'; ctx.beginPath(); ctx.arc(x + 14, cy + 1, 4.5, 0, Math.PI * 2); ctx.fill();
-          ctx.fillStyle = busy ? '#6fd3ff' : '#4d5868';
-          ctx.beginPath(); ctx.moveTo(cx + 3, cy - 5); ctx.lineTo(cx + 7, cy - 5); ctx.lineTo(cx + 7, cy - 1); ctx.lineTo(cx + 11, cy + 7); ctx.lineTo(cx - 1, cy + 7); ctx.lineTo(cx + 3, cy - 1); ctx.closePath(); ctx.fill();
-          ctx.fillStyle = '#9aa2af'; ctx.fillRect(cx - 6, y + 4, 2, 7); // antenna
-          if (busy && Math.random() < 0.12) spawn(2, cx + 5 + (Math.random() - 0.5) * 6, cy - 6, 0, -14, 1, '#bdf0ff');
+          ctx.fillStyle = '#dfe5ec'; ctx.beginPath(); ctx.roundRect(x + 6, y + 7, 28, 26, 3); ctx.fill(); ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.fillStyle = '#eef1f5'; ctx.fillRect(x + 10, y + 11, 20, 18); ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 1; ctx.strokeRect(x + 10, y + 11, 20, 18);
+          MT.Shapes.flask(ctx, x + 18, y + 22, 1.1, busy ? '#6fd3ff' : '#6f7888');
+          ctx.beginPath(); ctx.arc(x + 15, y + 14.5, 5.5, 0, Math.PI * 2); ctx.fillStyle = '#f2f4f7'; ctx.fill(); ctx.strokeStyle = '#7f8b99'; ctx.stroke(); // dish
+          ctx.beginPath(); ctx.arc(x + 15, y + 14.5, 2.5, 0, Math.PI * 2); ctx.stroke();
+          ctx.fillStyle = '#7f8b99'; ctx.beginPath(); ctx.arc(x + 15, y + 14.5, 1, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x + 23, y + 14); ctx.lineTo(x + 30, y + 14); ctx.stroke(); // sensor mast
+          ctx.fillStyle = '#ff5d5d'; ctx.beginPath(); ctx.arc(x + 26.5, y + 14, 1.8, 0, Math.PI * 2); ctx.fill();
+          if (busy && Math.random() < 0.12) spawn(2, x + 18 + (Math.random() - 0.5) * 4, y + 18, 0, -14, 1, '#bdf0ff');
           break;
         }
       }
@@ -474,7 +519,7 @@
         if (L < 0.02) continue;
         const pad = m.type === 'hab' ? 10 : 8;
         const x0 = m.c * T + pad, y0 = m.r * T + pad, x1 = (m.c + m.w) * T - pad, y1 = (m.r + m.h) * T - pad;
-        const len = (m.type === 'hab' ? 38 : m.type === 'solar' ? 32 : 18) * (1 + (1 - L) * 1.5);
+        const len = (SHADOW_LEN[m.type] || 18) * (1 + (1 - L) * 1.5);
         const pts = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
         const hp = hull(pts.concat(pts.map(([px, py]) => [px - sv.x * len, py - sv.y * len])));
         ctx.fillStyle = `rgba(0,0,0,${(0.28 * L).toFixed(3)})`;
@@ -574,6 +619,9 @@
           const bc = j && j.m ? center(j.m) : homeC; // moon-dirt shield: walk around that HAB
           const jc = j && j.m && j.kind !== 'berm' ? center(j.m) : { x: bc.x + Math.cos(time * 0.4 + i * 3) * 42, y: bc.y + Math.sin(time * 0.4 + i * 3) * 42 };
           tx = jc.x + Math.sin(time * 3 + i) * 3; ty = jc.y + 15; visible = true;
+          // Still walking there: drawn exactly where the sim says they are (the work starts when they arrive).
+          const wp = MT.Sim.walkPoint(state, A, ui.frac);
+          if (wp) { tx = wp.c * T; ty = wp.r * T + 15; a.x = tx; a.y = ty; a.init = true; a.dir = Math.atan2(wp.dr, wp.dc); }
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;

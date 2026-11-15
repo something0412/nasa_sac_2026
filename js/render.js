@@ -159,105 +159,212 @@
       const on = m.built && m.on && m.powered;
       ctx.save();
       if (!m.built) ctx.globalAlpha = 0.45;
+      // Seen from straight above, in the same "Clean NASA" colors as the 2.5D models (js/models.js).
+      const HULL = '#eef1f5', TRIM = '#b8c0cb', METAL = '#8f98a6', FOIL = '#d9a93a', ORANGE = '#e8742a', LINE = 'rgba(20,26,38,0.45)', SEAM = 'rgba(20,26,38,0.2)';
+      const roof = (x0, y0, x1, y1) => { // white surface lit from the top-left, like the 2.5D lighting
+        const g = ctx.createLinearGradient(x0, y0, x1, y1);
+        g.addColorStop(0, '#ffffff'); g.addColorStop(0.55, '#e4e9ef'); g.addColorStop(1, '#b9c1cc');
+        return g;
+      };
       switch (m.type) {
         case 'hab': {
+          // A cylinder module lying left→right, with an airlock on the right, a radiator on top and portholes.
           if (state.berm.built || state.berm.building) {
             const f = state.berm.built ? 1 : state.berm.progress / C.bermWork;
-            ctx.beginPath(); ctx.arc(cx, cy, 38, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
-            ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 9; ctx.stroke();
+            ctx.beginPath(); ctx.arc(cx, cy, 36, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
+            ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 10; ctx.stroke();
+            ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 2; ctx.setLineDash([2, 5]); ctx.stroke(); ctx.setLineDash([]);
           }
-          ctx.beginPath(); ctx.arc(cx, cy, 31, 0, Math.PI * 2);
-          ctx.fillStyle = '#d9dde4'; ctx.fill();
-          ctx.lineWidth = 2; ctx.strokeStyle = '#8f96a3'; ctx.stroke();
-          ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI * 2); ctx.strokeStyle = '#aab1bd'; ctx.stroke();
-          for (let i = 0; i < 6; i++) {
-            const a = (i / 6) * Math.PI * 2 + 0.3;
-            ctx.fillStyle = on ? (state.habTemp < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
-            ctx.fillRect(cx + Math.cos(a) * 25 - 3, cy + Math.sin(a) * 25 - 3, 6, 6);
+          const bx = cx - 30, by = cy - 17, bw = 54, bh = 34;
+          ctx.fillStyle = METAL; // landing legs
+          for (const [lx, ly] of [[bx + 12, by - 5], [bx + bw - 14, by - 5], [bx + 12, by + bh + 1], [bx + bw - 14, by + bh + 1]]) ctx.fillRect(lx, ly, 4, 4);
+          ctx.fillStyle = roof(0, by, 0, by + bh); ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 15); ctx.fill();
+          ctx.strokeStyle = LINE; ctx.lineWidth = 1.2; ctx.stroke();
+          ctx.strokeStyle = SEAM; ctx.lineWidth = 1;
+          for (const sx of [bx + 12, bx + 36, bx + bw - 4]) { ctx.beginPath(); ctx.moveTo(sx, by + 2); ctx.lineTo(sx, by + bh - 2); ctx.stroke(); }
+          ctx.fillStyle = FOIL; ctx.fillRect(bx + 19, by + 0.5, 5, bh - 1); // gold foil band
+          ctx.fillStyle = '#f7f8fa'; ctx.fillRect(bx + 28, by + 5, 17, 13); // radiator
+          ctx.strokeStyle = TRIM; ctx.lineWidth = 1; ctx.strokeRect(bx + 28, by + 5, 17, 13);
+          ctx.strokeStyle = SEAM; for (let i = 1; i < 5; i++) { ctx.beginPath(); ctx.moveTo(bx + 28 + i * 3.4, by + 5); ctx.lineTo(bx + 28 + i * 3.4, by + 18); ctx.stroke(); }
+          const win = on ? (state.habTemp < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
+          for (const wx of [bx + 8, bx + 30, bx + 40]) { // portholes along the near side
+            ctx.fillStyle = TRIM; ctx.beginPath(); ctx.arc(wx, by + bh - 6, 3.6, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = win; ctx.beginPath(); ctx.arc(wx, by + bh - 6, 2.4, 0, Math.PI * 2); ctx.fill();
           }
-          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('HAB', cx, cy + 4);
+          ctx.fillStyle = TRIM; ctx.beginPath(); ctx.roundRect(bx + bw - 2, cy - 10, 12, 20, 6); ctx.fill(); // airlock
+          ctx.strokeStyle = LINE; ctx.stroke();
+          ctx.fillStyle = on ? '#2c3442' : '#1c2028'; ctx.fillRect(bx + bw + 7, cy - 5, 3, 10);
+          ctx.fillStyle = ORANGE; ctx.fillRect(bx + bw + 7, cy - 1, 3, 2);
+          // antenna with a beacon: blue = fine, red = no power
+          ctx.fillStyle = METAL; ctx.beginPath(); ctx.arc(bx + 10, by + 9, 2.2, 0, Math.PI * 2); ctx.fill();
+          if (m.on && !m.powered) { if (blink) { ctx.fillStyle = '#ff5d5d'; ctx.beginPath(); ctx.arc(bx + 10, by + 9, 3.2, 0, Math.PI * 2); ctx.fill(); } }
+          else if (on && blink) { ctx.fillStyle = '#7fd0ff'; ctx.beginPath(); ctx.arc(bx + 10, by + 9, 2.2, 0, Math.PI * 2); ctx.fill(); }
+          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('HAB', cx - 3, by + bh + 13);
           break;
         }
         case 'solar': {
           const L = lightAt(state, m);
-          ctx.fillStyle = '#555'; ctx.fillRect(cx - 3, cy - 3, 6, 6);
+          ctx.fillStyle = TRIM; ctx.fillRect(cx - 8, cy - 8, 16, 16); ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.strokeRect(cx - 8, cy - 8, 16, 16);
+          ctx.strokeStyle = METAL; ctx.lineWidth = 1.2; // struts from the corners to the mast
+          for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.beginPath(); ctx.moveTo(cx + a * 7, cy + b * 7); ctx.lineTo(cx, cy); ctx.stroke(); }
+          ctx.fillStyle = '#3b424e'; ctx.fillRect(cx + 2, cy - 7, 5, 4); // turning motor
           const s = sunVec(state);
           ctx.translate(cx, cy); ctx.rotate(Math.atan2(s.y, s.x) + Math.PI / 2); // panel turns to face the Sun
-          ctx.fillStyle = rgb(mix([29, 44, 72], [47, 111, 214], L));
-          ctx.fillRect(-16, -5, 32, 10);
-          ctx.strokeStyle = rgb(mix([58, 74, 102], [156, 195, 255], L)); ctx.lineWidth = 1;
-          for (let i = -16; i <= 16; i += 8) { ctx.beginPath(); ctx.moveTo(i, -5); ctx.lineTo(i, 5); ctx.stroke(); }
-          ctx.strokeRect(-16, -5, 32, 10);
-          if (L > 0.3 && m.built && m.on) { ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.25 * Math.sin(time * 3 + m.id)) * L})`; ctx.fillRect(-16, -5, 8, 10); }
+          ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(-17, -3, 34, 10); // its own small shadow
+          ctx.fillStyle = rgb(mix([29, 44, 72], [47, 111, 214], m.on ? L : L * 0.4));
+          ctx.fillRect(-17, -6, 34, 10);
+          ctx.strokeStyle = rgb(mix([58, 74, 102], [156, 195, 255], L)); ctx.lineWidth = 0.8;
+          for (let i = -17 + 34 / 6; i < 17; i += 34 / 6) { ctx.beginPath(); ctx.moveTo(i, -6); ctx.lineTo(i, 4); ctx.stroke(); }
+          ctx.beginPath(); ctx.moveTo(-17, -1); ctx.lineTo(17, -1); ctx.stroke();
+          ctx.strokeStyle = TRIM; ctx.lineWidth = 1.6; ctx.strokeRect(-17, -6, 34, 10); // aluminium frame
+          ctx.fillStyle = '#3b424e'; ctx.beginPath(); ctx.arc(0, -1, 2.2, 0, Math.PI * 2); ctx.fill(); // hinge
+          if (L > 0.3 && m.built && m.on && !m.damaged) { ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.25 * Math.sin(time * 3 + m.id)) * L})`; ctx.fillRect(-17, -6, 9, 10); }
           break;
         }
         case 'battery': {
           const cap = MT.Sim.batteryCap(state) || 1;
-          const f = state.res.battery / cap;
-          ctx.fillStyle = '#2a2f38'; ctx.fillRect(x + 8, y + 7, 24, 28);
-          ctx.fillStyle = '#596273'; ctx.fillRect(x + 15, y + 4, 10, 4);
-          ctx.fillStyle = f < 0.2 ? '#ff5d5d' : f < 0.5 ? '#ffc04d' : '#5fe08a';
-          if (m.built) ctx.fillRect(x + 11, y + 32 - 22 * f, 18, 22 * f);
-          ctx.strokeStyle = '#8a93a3'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 8, y + 7, 24, 28);
+          const f = Math.max(0, Math.min(1, state.res.battery / cap));
+          ctx.fillStyle = TRIM; ctx.fillRect(x + 5, y + 6, 30, 30); // pad
+          ctx.fillStyle = '#2a2f38'; ctx.beginPath(); ctx.roundRect(x + 7, y + 8, 26, 26, 3); ctx.fill();
+          ctx.fillStyle = '#3b424e'; ctx.fillRect(x + 9, y + 10, 22, 16); // lid
+          ctx.strokeStyle = '#565e6c'; ctx.lineWidth = 1; // cooling fins on the side
+          for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(x + 33, y + 10 + i * 4); ctx.lineTo(x + 36, y + 10 + i * 4); ctx.stroke(); }
+          ctx.fillStyle = 'rgba(0,0,0,0.35)'; for (let i = 0; i < 3; i++) ctx.fillRect(x + 15 + i * 4, y + 19, 2, 5); // vents
+          ctx.fillStyle = ORANGE; ctx.beginPath(); ctx.arc(x + 13, y + 14, 2.6, 0, Math.PI * 2); ctx.fill(); // + terminal
+          ctx.fillStyle = '#15181d'; ctx.beginPath(); ctx.arc(x + 27, y + 14, 2.6, 0, Math.PI * 2); ctx.fill(); // − terminal
+          const col = f < 0.2 ? '#ff5d5d' : f < 0.5 ? '#ffc04d' : '#5fe08a';
+          for (let i = 0; i < 6; i++) { ctx.fillStyle = m.built && i / 6 < f - 0.001 ? col : '#1b2029'; ctx.fillRect(x + 9.5 + i * 3.6, y + 28, 2.8, 4); } // LED charge bar
+          for (let i = 0; i < 7; i++) { ctx.fillStyle = i % 2 ? '#22262d' : '#f2c230'; ctx.fillRect(x + 5 + i * 30 / 7, y + 34, 30 / 7, 2); } // safety stripes
+          ctx.strokeStyle = '#8a93a3'; ctx.lineWidth = 1.2; ctx.strokeRect(x + 7, y + 8, 26, 26);
           break;
         }
         case 'o2gen': {
-          ctx.fillStyle = '#c9d3df'; ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI * 2); ctx.fill();
-          ctx.strokeStyle = '#7f8b99'; ctx.lineWidth = 2; ctx.stroke();
-          ctx.fillStyle = on && !m.noWater ? '#58c4ff' : '#59636f';
-          ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; ctx.fillText('O₂', cx, cy + 4);
-          if (on && !m.noWater && Math.random() < 0.15) spawn(2, cx + (Math.random() - 0.5) * 12, cy - 8, 0, -12, 1.2, '#9fe0ff');
+          const running = on && !m.noWater, water = Math.max(0, Math.min(1, state.res.water / C.caps.water));
+          ctx.fillStyle = TRIM; ctx.fillRect(x + 3, y + 3, 34, 34); // pad
+          ctx.strokeStyle = METAL; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x + 15, y + 17); ctx.lineTo(x + 25, y + 25); ctx.stroke(); // pipe
+          ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(x + 20, y + 21, 2.4, 0, Math.PI * 2); ctx.stroke(); // valve
+          ctx.fillStyle = roof(x + 4, y + 4, x + 20, y + 20); ctx.beginPath(); ctx.arc(x + 12, y + 13, 8, 0, Math.PI * 2); ctx.fill(); // water tank
+          ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.stroke();
+          ctx.strokeStyle = '#58c4ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x + 12, y + 13, 5.5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (m.noWater ? 0 : water)); ctx.stroke(); // water level
+          ctx.fillStyle = TRIM; ctx.fillRect(x + 22, y + 6, 12, 10); ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.strokeRect(x + 22, y + 6, 12, 10); // electrolysis unit
+          ctx.fillStyle = !m.built ? '#555' : running ? '#5fe08a' : m.on && !m.powered ? '#ff5d5d' : m.noWater ? '#58c4ff' : '#555';
+          ctx.beginPath(); ctx.arc(x + 31, y + 9, 1.6, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = roof(x + 20, y + 20, x + 34, y + 34); ctx.beginPath(); ctx.arc(x + 27, y + 27, 7, 0, Math.PI * 2); ctx.fill(); // oxygen tank
+          ctx.strokeStyle = LINE; ctx.stroke();
+          ctx.strokeStyle = ORANGE; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x + 27, y + 27, 5, 0, Math.PI * 2); ctx.stroke();
+          ctx.fillStyle = running ? '#2f7fd0' : '#59636f'; ctx.font = 'bold 7px system-ui'; ctx.textAlign = 'center'; ctx.fillText('O₂', x + 27, y + 29.5);
+          if (running && Math.random() < 0.15) spawn(2, x + 27 + (Math.random() - 0.5) * 8, y + 21, 0, -12, 1.2, '#9fe0ff');
           break;
         }
         case 'greenhouse': {
-          ctx.fillStyle = on ? 'rgba(255,120,220,0.25)' : 'rgba(80,90,100,0.4)';
-          ctx.fillRect(x + 3, y + 3, w - 6, h - 6);
-          ctx.strokeStyle = on ? '#ff9de8' : '#6b7480'; ctx.lineWidth = 2; ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
-          for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
-            ctx.fillStyle = on ? '#4fdc6a' : '#3c6b45';
-            ctx.beginPath(); ctx.arc(x + 11 + i * 9, y + 11 + j * 9, on ? 3.3 + Math.sin(time * 2 + i + j) * 0.4 : 2.4, 0, Math.PI * 2); ctx.fill();
+          const grown = Math.min(1, state.hour / 360);
+          ctx.fillStyle = TRIM; ctx.fillRect(x + 2, y + 4, w - 4, h - 8); // base frame
+          ctx.fillStyle = on ? '#4a2c44' : '#2e3138'; ctx.fillRect(x + 4, y + 6, w - 8, h - 12); // growing beds
+          ctx.fillStyle = '#7c8392'; ctx.fillRect(x + 4, cy - 1, w - 8, 2); // walkway
+          for (let row = 0; row < 2; row++) for (let i = 0; i < 4; i++) {
+            const px = x + 9 + i * 7.5, py = y + 12 + row * 15;
+            const rr = (on ? 2.6 : 1.8) * (0.55 + 0.45 * grown) + (on ? Math.sin(time * 2 + i + row) * 0.3 : 0);
+            ctx.fillStyle = on ? '#4fdc6a' : '#3c6b45'; ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2); ctx.fill();
+            if (on && grown > 0.55 && (i + row) % 2 === 0) { ctx.fillStyle = '#ff5a4a'; ctx.beginPath(); ctx.arc(px + 1.5, py + 1, 1.2, 0, Math.PI * 2); ctx.fill(); } // tomatoes
           }
+          ctx.strokeStyle = '#58c4ff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + 5, y + h - 8); ctx.lineTo(x + w - 5, y + h - 8); ctx.stroke(); // drip hose
+          ctx.fillStyle = on ? 'rgba(255,140,225,0.2)' : 'rgba(150,160,175,0.25)'; ctx.fillRect(x + 3, y + 5, w - 6, h - 10); // glass roof
+          ctx.strokeStyle = 'rgba(238,241,245,0.8)'; ctx.lineWidth = 1;
+          for (let i = 0; i <= 3; i++) { const rx = x + 3 + ((w - 6) * i) / 3; ctx.beginPath(); ctx.moveTo(rx, y + 5); ctx.lineTo(rx, y + h - 5); ctx.stroke(); } // ribs
+          ctx.strokeStyle = on ? '#ff8ee6' : '#59606c'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(x + 4, cy); ctx.lineTo(x + w - 4, cy); ctx.stroke(); // LED strip
+          ctx.strokeStyle = on ? '#ff9de8' : '#6b7480'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 3, y + 5, w - 6, h - 10);
+          ctx.fillStyle = TRIM; ctx.fillRect(x + w - 4, cy - 4, 3, 8); // door
           break;
         }
         case 'drill': {
-          ctx.strokeStyle = '#e0b860'; ctx.lineWidth = 2.5;
-          ctx.beginPath(); ctx.moveTo(cx, y + 6); ctx.lineTo(x + 7, y + 34); ctx.moveTo(cx, y + 6); ctx.lineTo(x + 33, y + 34); ctx.stroke();
-          ctx.translate(cx, cy + 6); ctx.rotate(on ? time * 8 : 0);
-          ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.stroke();
-          if (on && Math.random() < 0.25) spawn(1, cx, cy + 10, (Math.random() - 0.5) * 30, -Math.random() * 15, 0.9, 'rgba(190,220,255,0.8)');
+          ctx.fillStyle = TRIM; ctx.fillRect(x + 4, y + 4, 30, 30); // platform
+          for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? '#22262d' : '#f2c230'; ctx.fillRect(x + 4 + i * 30 / 8, y + 32, 30 / 8, 2); }
+          const dx = x + 19, dy = y + 19;
+          ctx.strokeStyle = METAL; ctx.lineWidth = 1; ctx.strokeRect(dx - 9, dy - 9, 18, 18); // braces
+          ctx.strokeStyle = ORANGE; ctx.lineWidth = 2.4; // derrick legs leaning in to the top
+          for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.beginPath(); ctx.moveTo(dx + a * 13, dy + b * 13); ctx.lineTo(dx + a * 3, dy + b * 3); ctx.stroke(); }
+          ctx.fillStyle = HULL; ctx.fillRect(dx - 4.5, dy - 4.5, 9, 9); ctx.fillStyle = ORANGE; ctx.fillRect(dx - 4.5, dy - 4.5, 9, 2.5); // motor head
+          ctx.save(); ctx.translate(dx, dy + 1); ctx.rotate(on ? time * 8 : 0); ctx.strokeStyle = '#2c3442'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(3, 0); ctx.stroke(); ctx.restore();
+          if (on && blink) { ctx.fillStyle = '#ffb347'; ctx.beginPath(); ctx.arc(dx + 3, dy - 3, 1.6, 0, Math.PI * 2); ctx.fill(); }
+          ctx.fillStyle = roof(x + 29, y + 3, x + 39, y + 13); ctx.beginPath(); ctx.arc(x + 34, y + 8, 5, 0, Math.PI * 2); ctx.fill(); // water tank
+          ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.stroke();
+          ctx.strokeStyle = '#58c4ff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x + 34, y + 8, 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0, Math.min(1, state.res.water / C.caps.water))); ctx.stroke();
+          if (on && Math.random() < 0.25) spawn(1, dx, dy + 4, (Math.random() - 0.5) * 30, -Math.random() * 15, 0.9, 'rgba(190,220,255,0.8)');
           break;
         }
         case 'shelter': {
-          ctx.fillStyle = '#8a7558'; ctx.beginPath(); ctx.ellipse(cx, cy + 4, 17, 13, 0, Math.PI, 0); ctx.lineTo(cx + 17, cy + 10); ctx.lineTo(cx - 17, cy + 10); ctx.fill();
-          ctx.fillStyle = '#2b2b2b'; ctx.fillRect(cx - 4, cy + 1, 8, 9);
-          ctx.strokeStyle = '#b39a77'; ctx.lineWidth = 1.5; ctx.stroke();
-          if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', cx, y + 7); }
+          const g = ctx.createRadialGradient(cx - 4, cy - 5, 2, cx, cy, 17); // mound of moon dirt
+          g.addColorStop(0, '#a48e70'); g.addColorStop(1, '#6f5d47');
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx - 1, cy, 15, 0, Math.PI * 2); ctx.fill();
+          for (let i = 0; i < 12; i++) { // ring of sandbags
+            const a = (i / 12) * Math.PI * 2;
+            ctx.fillStyle = '#9c8768'; ctx.beginPath(); ctx.ellipse(cx - 1 + Math.cos(a) * 16, cy + Math.sin(a) * 16, 3.4, 2.2, a + Math.PI / 2, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = 'rgba(40,30,20,0.4)'; ctx.lineWidth = 0.7; ctx.stroke();
+          }
+          ctx.fillStyle = 'rgba(0,0,0,0.2)'; for (const [a, d] of [[0.7, 6], [2.4, 8], [4.1, 5]]) { ctx.beginPath(); ctx.arc(cx - 1 + Math.cos(a) * d, cy + Math.sin(a) * d, 1.6, 0, Math.PI * 2); ctx.fill(); } // rocks
+          ctx.fillStyle = TRIM; ctx.fillRect(cx + 8, cy - 6, 9, 12); ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.strokeRect(cx + 8, cy - 6, 9, 12); // hatch
+          ctx.fillStyle = '#20252e'; ctx.fillRect(cx + 12, cy - 4, 4, 8); ctx.fillStyle = ORANGE; ctx.fillRect(cx + 12, cy - 0.5, 4, 1.5);
+          ctx.fillStyle = '#f2c230'; ctx.beginPath(); ctx.arc(cx - 2, cy - 2, 3.4, 0, Math.PI * 2); ctx.fill(); // radiation sign
+          ctx.fillStyle = '#22262d';
+          for (let i = 0; i < 3; i++) { const a = -Math.PI / 2 + (i * Math.PI * 2) / 3; ctx.beginPath(); ctx.moveTo(cx - 2, cy - 2); ctx.arc(cx - 2, cy - 2, 2.8, a - 0.5, a + 0.5); ctx.closePath(); ctx.fill(); }
+          if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.beginPath(); ctx.arc(cx + 12, cy - 8, 2, 0, Math.PI * 2); ctx.fill(); ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', cx, y + 7); }
           break;
         }
         case 'gym': {
-          // Floor mat with a dumbbell. It bounces when someone is training.
+          // Flat-roofed module. Through the skylight: a treadmill, an exercise bike and weights.
           const training = state.crew.some((a) => a.where === 'gym' && a.gymId === m.id);
-          ctx.fillStyle = '#2f3a4c'; ctx.beginPath(); ctx.roundRect(x + 5, y + 7, w - 10, h - 14, 6); ctx.fill();
-          ctx.strokeStyle = on && !m.damaged ? '#7fb4ff' : '#59636f'; ctx.lineWidth = 1.5; ctx.stroke();
-          const lift = training ? Math.abs(Math.sin(time * 4)) * 5 : 0;
-          ctx.translate(cx, cy + 2 - lift);
-          ctx.fillStyle = '#c9d3df'; ctx.fillRect(-9, -1.5, 18, 3);
-          ctx.fillStyle = training ? '#ffd36b' : '#8a93a3';
-          ctx.fillRect(-13, -6, 4, 12); ctx.fillRect(9, -6, 4, 12);
+          const lit = on && !m.damaged;
+          ctx.fillStyle = TRIM; ctx.fillRect(x + 3, y + 4, w - 6, h - 8); // base
+          ctx.fillStyle = roof(x + 5, y + 6, x + w - 5, y + h - 6); ctx.fillRect(x + 5, y + 6, w - 10, h - 12); // roof
+          ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.strokeRect(x + 5, y + 6, w - 10, h - 12);
+          ctx.fillStyle = ORANGE; ctx.fillRect(x + 5, y + h - 9, w - 10, 2); // stripe
+          ctx.fillStyle = lit ? '#3d4b66' : '#1d2533'; ctx.fillRect(x + 8, y + 9, 15, 19); // skylight
+          ctx.strokeStyle = TRIM; ctx.strokeRect(x + 8, y + 9, 15, 19);
+          if (lit) { ctx.fillStyle = 'rgba(255,220,140,0.18)'; ctx.fillRect(x + 8, y + 9, 15, 19); }
+          // treadmill (its belt moves when someone trains)
+          ctx.fillStyle = '#5b6270'; ctx.fillRect(x + 10, y + 11, 5, 11);
+          ctx.strokeStyle = '#8f98a6'; ctx.lineWidth = 0.8;
+          const belt = training && lit ? (time * 14) % 3 : 0;
+          for (let i = 0; i < 4; i++) { const ly = y + 12 + ((i * 3 + belt) % 10); ctx.beginPath(); ctx.moveTo(x + 10.5, ly); ctx.lineTo(x + 14.5, ly); ctx.stroke(); }
+          if (training && lit) { ctx.fillStyle = '#ffd36b'; ctx.beginPath(); ctx.arc(x + 12.5, y + 16, 1.8, 0, Math.PI * 2); ctx.fill(); } // someone running
+          ctx.strokeStyle = '#5b6270'; ctx.lineWidth = 1.2; // exercise bike
+          ctx.beginPath(); ctx.arc(x + 19, y + 14, 2.2, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.moveTo(x + 19, y + 16); ctx.lineTo(x + 19, y + 21); ctx.stroke();
+          const lift = training && lit ? Math.abs(Math.sin(time * 4)) * 1.5 : 0; // dumbbell
+          ctx.fillStyle = '#c9d3df'; ctx.fillRect(x + 16, y + 24.5 - lift, 6, 1.2);
+          ctx.fillStyle = training && lit ? '#ffd36b' : '#8a93a3'; ctx.fillRect(x + 15, y + 23.5 - lift, 1.6, 3.2); ctx.fillRect(x + 21.4, y + 23.5 - lift, 1.6, 3.2);
+          ctx.fillStyle = HULL; ctx.fillRect(x + 25, y + 9, 9, 9); ctx.strokeStyle = LINE; ctx.strokeRect(x + 25, y + 9, 9, 9); // air-conditioning unit
+          ctx.fillStyle = '#4a5160'; ctx.beginPath(); ctx.arc(x + 29.5, y + 13.5, 3.4, 0, Math.PI * 2); ctx.fill();
+          ctx.save(); ctx.translate(x + 29.5, y + 13.5); ctx.rotate(on ? time * 9 : 0.4); ctx.strokeStyle = '#c9d1dc'; ctx.lineWidth = 1;
+          for (let i = 0; i < 3; i++) { ctx.rotate((Math.PI * 2) / 3); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(3, 0); ctx.stroke(); }
+          ctx.restore();
+          ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.roundRect(x + 25, y + 21, 9, 6, 1.5); ctx.fill(); // dumbbell sign
+          ctx.fillStyle = ORANGE; ctx.fillRect(x + 27, y + 23.6, 5, 0.9); ctx.fillRect(x + 26.3, y + 22.5, 1.2, 3); ctx.fillRect(x + 31.5, y + 22.5, 1.2, 3);
+          ctx.fillStyle = '#3b424e'; ctx.fillRect(x + w - 6, y + 20, 2, 8); // door on the side
+          if (lit) { ctx.fillStyle = '#ffdc96'; ctx.fillRect(x + w - 6, y + 19, 2, 1.2); }
           break;
         }
         case 'tower': {
-          // Square base, white observatory dome with an open slit, and a telescope that slowly sweeps the sky.
-          ctx.fillStyle = '#4b5361'; ctx.fillRect(x + 9, cy + 2, w - 18, 14);
-          ctx.strokeStyle = '#6f7888'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 9, cy + 2, w - 18, 14);
-          ctx.fillStyle = '#e4e8ee'; ctx.beginPath(); ctx.arc(cx, cy + 2, 12, Math.PI, 0); ctx.closePath(); ctx.fill();
-          ctx.strokeStyle = '#9aa2af'; ctx.stroke();
-          const sweep = m.built ? Math.sin(time * 0.6 + m.id) * 0.5 : 0;
-          ctx.save(); ctx.translate(cx, cy - 2); ctx.rotate(sweep);
-          ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
-          ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
+          // Round observatory from above: walkway with railing, gold rim, white dome with an open slit and the telescope.
+          ctx.fillStyle = TRIM; ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI * 2); ctx.fill(); // walkway deck
+          ctx.strokeStyle = METAL; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, 15, 0, Math.PI * 2); ctx.stroke(); // railing
+          for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; ctx.fillStyle = METAL; ctx.fillRect(cx + Math.cos(a) * 15 - 0.8, cy + Math.sin(a) * 15 - 0.8, 1.6, 1.6); }
+          ctx.fillStyle = FOIL; ctx.beginPath(); ctx.arc(cx, cy, 11.5, 0, Math.PI * 2); ctx.fill(); // gold rim
+          const g = ctx.createRadialGradient(cx - 3, cy - 4, 1, cx, cy, 11);
+          g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#c4ccd6');
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.fill(); // dome
+          ctx.strokeStyle = SEAM; ctx.lineWidth = 0.8;
+          for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * 10, cy + Math.sin(a) * 10); ctx.stroke(); }
+          const sweep = m.built ? time * 0.25 + m.id : 0.8; // the slit and telescope slowly turn
+          ctx.save(); ctx.translate(cx, cy); ctx.rotate(sweep);
+          ctx.fillStyle = '#141a26'; ctx.fillRect(-2.6, -10, 5.2, 10); // open slit
+          ctx.strokeStyle = '#e9edf2'; ctx.lineWidth = 3.4; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(0, -1); ctx.lineTo(0, -9); ctx.stroke(); // telescope
+          ctx.strokeStyle = FOIL; ctx.lineWidth = 3.8; ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, -6); ctx.stroke();
+          ctx.lineCap = 'butt'; ctx.fillStyle = '#2a3550'; ctx.beginPath(); ctx.arc(0, -9, 1.3, 0, Math.PI * 2); ctx.fill();
           ctx.restore();
-          if (m.built && blink) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); }
+          ctx.strokeStyle = METAL; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x + 6, y + 6); ctx.lineTo(x + 9, y + 9); ctx.stroke(); // weather mast
+          ctx.save(); ctx.translate(x + 6, y + 6); ctx.rotate(m.built ? time * 4 : 0); ctx.strokeStyle = TRIM; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(3, 0); ctx.moveTo(0, -3); ctx.lineTo(0, 3); ctx.stroke(); ctx.restore();
+          if (m.built && blink) { ctx.fillStyle = '#ff5d5d'; ctx.beginPath(); ctx.arc(x + 6, y + 6, 1.4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); }
           break;
         }
       }

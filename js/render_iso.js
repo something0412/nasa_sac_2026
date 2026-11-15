@@ -50,14 +50,6 @@
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y - d);
       ctx.closePath();
     }
-    // A box standing on a footprint: left face, right face, then the lid `ht` pixels up.
-    function prism(f, ht, top, left, right, edge) {
-      ctx.beginPath(); ctx.moveTo(f[3].x, f[3].y); ctx.lineTo(f[2].x, f[2].y); ctx.lineTo(f[2].x, f[2].y - ht); ctx.lineTo(f[3].x, f[3].y - ht); ctx.closePath();
-      ctx.fillStyle = left; ctx.fill(); if (edge) { ctx.strokeStyle = edge; ctx.stroke(); }
-      ctx.beginPath(); ctx.moveTo(f[2].x, f[2].y); ctx.lineTo(f[1].x, f[1].y); ctx.lineTo(f[1].x, f[1].y - ht); ctx.lineTo(f[2].x, f[2].y - ht); ctx.closePath();
-      ctx.fillStyle = right; ctx.fill(); if (edge) ctx.stroke();
-      poly(f, ht); ctx.fillStyle = top; ctx.fill(); if (edge) ctx.stroke();
-    }
 
     // ---------- screen size ----------
     function resize(cssW, cssH) {
@@ -211,187 +203,64 @@
       for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
       return lo.slice(0, -1).concat(up.slice(0, -1));
     }
-    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
-    const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
-    // How tall each building is drawn (pixels). Used for the block, labels and status icons.
-    const HEIGHT = { hab: 26, solar: 34, battery: 22, o2gen: 18, greenhouse: 20, drill: 32, shelter: 16, gym: 7, tower: 30 };
+    // ---------- buildings (the 3D models themselves live in js/models.js) ----------
+    const Models = MT.Models, VZ = Models.VZ;
+    const tk = Models.Toolkit(ctx, P);
+    // What the models need to know. Filled once per frame in draw(), then per building in drawModule().
+    const env = { state: null, t: 0, blink: false, sun: Models.sunVector(45), L: 1, on: false, charge: 0, water: 0, growth: 1, training: false, spawn };
 
-    // ---------- buildings ----------
     function drawModule(state, m, blink) {
-      const on = m.built && m.on && m.powered;
-      const ctr = mid(m), ht = HEIGHT[m.type] || 16;
+      const ctr = mid(m), ht = Models.height(m.type) * VZ;
+      env.state = state; env.t = time; env.blink = blink;
+      env.L = lightAt(state, m);
+      env.on = m.built && m.on && m.powered;
+      env.training = m.type === 'gym' && state.crew.some((a) => a.where === 'gym' && a.gymId === m.id);
+      tk.setLight(env.sun, env.L, m.built && !m.on ? 0.72 : 1); // switched-off buildings look a bit darker
       ctx.save();
-      if (!m.built) ctx.globalAlpha = 0.45;
-      ctx.lineWidth = 1;
-      switch (m.type) {
-        case 'hab': {
-          if (state.berm.built || state.berm.building) { // moon-dirt shield piled around the habitat
-            const f = state.berm.built ? 1 : state.berm.progress / C.bermWork;
-            ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y, 2.1 * HW * 0.62, 2.1 * HH * 0.62, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
-            ctx.strokeStyle = '#8a7558'; ctx.lineWidth = 12; ctx.stroke(); ctx.lineWidth = 1;
-          }
-          const f = footprint(m.c, m.r, m.w, m.h, 0.32);
-          prism(f, ht - 10, '#d9dde4', '#aeb5c1', '#c4cad4', '#8f96a3');
-          // dome roof
-          ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y - (ht - 10), HW * 0.95, HH * 0.95, 0, Math.PI, 0);
-          ctx.lineTo(ctr.x + HW * 0.95, ctr.y - (ht - 10)); ctx.ellipse(ctr.x, ctr.y - (ht - 10), HW * 0.95, HH * 0.95, 0, 0, Math.PI);
-          ctx.fillStyle = '#e4e8ee'; ctx.fill();
-          ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y - (ht - 10), HW * 0.95, HW * 0.55, 0, Math.PI, 0);
-          ctx.fillStyle = '#eef1f5'; ctx.fill(); ctx.strokeStyle = '#8f96a3'; ctx.stroke();
-          // windows on the two front walls
-          const win = on ? (state.habTemp < 15 ? '#7fb4ff' : '#ffd36b') : '#39404b';
-          ctx.fillStyle = win;
-          for (const t of [0.3, 0.7]) {
-            const a = { x: f[3].x + (f[2].x - f[3].x) * t, y: f[3].y + (f[2].y - f[3].y) * t };
-            const b = { x: f[2].x + (f[1].x - f[2].x) * t, y: f[2].y + (f[1].y - f[2].y) * t };
-            ctx.fillRect(a.x - 3, a.y - 12, 6, 6); ctx.fillRect(b.x - 3, b.y - 12, 6, 6);
-          }
-          ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('HAB', ctr.x, ctr.y - ht + 2);
-          break;
-        }
-        case 'solar': {
-          // A tall panel on a post. It turns to face the Sun (the Sun is always low at the south pole).
-          const L = lightAt(state, m), s = sunGrid(state);
-          ctx.fillStyle = '#555'; ctx.fillRect(ctr.x - 1.5, ctr.y - 10, 3, 10);
-          const half = gridDir(-s.r * 0.36, s.c * 0.36); // half the panel width, sideways to the Sun
-          const lo = 8, hi = ht;
-          const a = { x: ctr.x - half.x, y: ctr.y - half.y }, b = { x: ctr.x + half.x, y: ctr.y + half.y };
-          ctx.beginPath(); ctx.moveTo(a.x, a.y - lo); ctx.lineTo(b.x, b.y - lo); ctx.lineTo(b.x, b.y - hi); ctx.lineTo(a.x, a.y - hi); ctx.closePath();
-          const facing = gridDir(s.c, s.r).y > 0; // we see the sunny side when the Sun is "in front"
-          ctx.fillStyle = rgb(mix(facing ? [29, 44, 72] : [22, 28, 40], facing ? [47, 111, 214] : [52, 64, 88], L)); ctx.fill();
-          ctx.strokeStyle = rgb(mix([58, 74, 102], [156, 195, 255], L)); ctx.stroke();
-          ctx.beginPath();
-          for (let i = 1; i < 4; i++) { const t = i / 4; ctx.moveTo(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t - lo); ctx.lineTo(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t - hi); }
-          ctx.stroke();
-          if (L > 0.3 && m.built && m.on && facing) {
-            ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.25 * Math.sin(time * 3 + m.id)) * L})`;
-            ctx.beginPath(); ctx.moveTo(a.x, a.y - lo); ctx.lineTo(a.x + (b.x - a.x) * 0.25, a.y + (b.y - a.y) * 0.25 - lo);
-            ctx.lineTo(a.x + (b.x - a.x) * 0.25, a.y + (b.y - a.y) * 0.25 - hi); ctx.lineTo(a.x, a.y - hi); ctx.closePath(); ctx.fill();
-          }
-          break;
-        }
-        case 'battery': {
-          const cap = MT.Sim.batteryCap(state) || 1;
-          const fr = Math.max(0, Math.min(1, state.res.battery / cap));
-          const f = footprint(m.c, m.r, 1, 1, 0.24);
-          prism(f, ht, '#3a414d', '#22272f', '#2a2f38', '#8a93a3');
-          // charge level shown on the right wall
-          if (m.built) {
-            const lvl = (ht - 6) * fr;
-            ctx.beginPath(); ctx.moveTo(f[2].x + 3, f[2].y - 3); ctx.lineTo(f[1].x - 3, f[1].y - 3 + 2); ctx.lineTo(f[1].x - 3, f[1].y - 3 + 2 - lvl); ctx.lineTo(f[2].x + 3, f[2].y - 3 - lvl); ctx.closePath();
-            ctx.fillStyle = fr < 0.2 ? '#ff5d5d' : fr < 0.5 ? '#ffc04d' : '#5fe08a'; ctx.fill();
-          }
-          ctx.fillStyle = '#596273'; ctx.fillRect(ctr.x - 4, ctr.y - ht - 3, 8, 4);
-          break;
-        }
-        case 'o2gen': {
-          const f = footprint(m.c, m.r, 1, 1, 0.26);
-          prism(f, ht, '#d6dee8', '#a9b4c2', '#bcc6d2', '#7f8b99');
-          ctx.fillStyle = on && !m.noWater ? '#58c4ff' : '#59636f';
-          ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; ctx.fillText('O₂', ctr.x, ctr.y - ht + 4);
-          if (on && !m.noWater && Math.random() < 0.15) spawn(2, ctr.x + (Math.random() - 0.5) * 12, ctr.y - ht - 4, 0, -12, 1.2, '#9fe0ff');
-          break;
-        }
-        case 'greenhouse': {
-          const f = footprint(m.c, m.r, 1, 1, 0.1);
-          poly(f); ctx.fillStyle = '#3a3f46'; ctx.fill(); // floor
-          for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { // plants
-            const p = P(m.c + 0.25 + i * 0.25, m.r + 0.25 + j * 0.25);
-            ctx.fillStyle = on ? '#4fdc6a' : '#3c6b45';
-            ctx.beginPath(); ctx.ellipse(p.x, p.y - 3, on ? 3.6 + Math.sin(time * 2 + i + j) * 0.4 : 2.6, on ? 4.5 : 3, 0, 0, Math.PI * 2); ctx.fill();
-          }
-          // glass walls and roof (see-through)
-          const glass = on ? 'rgba(255,120,220,0.18)' : 'rgba(80,90,100,0.3)', edge = on ? '#ff9de8' : '#6b7480';
-          prism(f, ht, on ? 'rgba(255,150,230,0.22)' : 'rgba(90,100,110,0.35)', glass, glass, edge);
-          break;
-        }
-        case 'drill': {
-          // Tripod over the ice, with a spinning drill bit.
-          const top = { x: ctr.x, y: ctr.y - ht };
-          ctx.strokeStyle = '#e0b860'; ctx.lineWidth = 2.5;
-          for (const [dc, dr] of [[-0.35, -0.35], [0.35, 0.05], [0.05, 0.35]]) {
-            const p = P(m.c + 0.5 + dc, m.r + 0.5 + dr);
-            ctx.beginPath(); ctx.moveTo(top.x, top.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-          }
-          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
-          const a = on ? time * 8 : 0;
-          ctx.beginPath(); ctx.moveTo(ctr.x - Math.cos(a) * 7, ctr.y - 4 - Math.sin(a) * 3.5); ctx.lineTo(ctr.x + Math.cos(a) * 7, ctr.y - 4 + Math.sin(a) * 3.5); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(ctr.x, top.y); ctx.lineTo(ctr.x, ctr.y - 4); ctx.stroke();
-          if (on && Math.random() < 0.25) spawn(1, ctr.x, ctr.y, (Math.random() - 0.5) * 30, -Math.random() * 15, 0.9, 'rgba(190,220,255,0.8)');
-          break;
-        }
-        case 'shelter': {
-          // A mound of moon dirt with a dark doorway: the dirt blocks the radiation.
-          ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y, HW * 0.75, HH * 0.75, 0, 0, Math.PI); ctx.ellipse(ctr.x, ctr.y, HW * 0.75, ht + HH * 0.2, 0, Math.PI, 0);
-          ctx.fillStyle = '#8a7558'; ctx.fill(); ctx.strokeStyle = '#b39a77'; ctx.lineWidth = 1.5; ctx.stroke();
-          ctx.beginPath(); ctx.ellipse(ctr.x - 2, ctr.y - ht * 0.55, HW * 0.55, ht * 0.5, 0, Math.PI * 1.15, Math.PI * 1.6);
-          ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.stroke();
-          ctx.fillStyle = '#2b2b2b'; ctx.beginPath(); ctx.roundRect(ctr.x - 4, ctr.y - 8, 8, 10, [4, 4, 0, 0]); ctx.fill();
-          if (state.sheltering) { ctx.fillStyle = '#7dff9a'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CREW', ctr.x, ctr.y - ht - 6); }
-          break;
-        }
-        case 'gym': {
-          const training = state.crew.some((a) => a.where === 'gym' && a.gymId === m.id);
-          const f = footprint(m.c, m.r, 1, 1, 0.12);
-          prism(f, ht, '#2f3a4c', '#232c3a', '#283244', on && !m.damaged ? '#7fb4ff' : '#59636f');
-          const lift = training ? Math.abs(Math.sin(time * 4)) * 6 : 0;
-          const y = ctr.y - ht - 4 - lift;
-          ctx.fillStyle = '#c9d3df'; ctx.fillRect(ctr.x - 9, y - 1.5, 18, 3);
-          ctx.fillStyle = training ? '#ffd36b' : '#8a93a3';
-          ctx.fillRect(ctr.x - 13, y - 6, 4, 12); ctx.fillRect(ctr.x + 9, y - 6, 4, 12);
-          break;
-        }
-        case 'tower': {
-          const f = footprint(m.c, m.r, 1, 1, 0.22);
-          prism(f, 14, '#5b6371', '#3f4652', '#4b5361', '#6f7888');
-          const dy = ctr.y - 14;
-          ctx.beginPath(); ctx.ellipse(ctr.x, dy, 13, 6.5, 0, 0, Math.PI); ctx.ellipse(ctr.x, dy, 13, 13, 0, Math.PI, 0);
-          ctx.fillStyle = '#e4e8ee'; ctx.fill(); ctx.strokeStyle = '#9aa2af'; ctx.stroke();
-          const sweep = m.built ? Math.sin(time * 0.6 + m.id) * 0.5 : 0;
-          ctx.save(); ctx.translate(ctr.x, dy - 4); ctx.rotate(sweep);
-          ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -9, 5, 9);
-          ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 8);
-          ctx.restore();
-          if (m.built && blink) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(f[1].x - 4, f[1].y - 16, 2.2, 0, Math.PI * 2); ctx.fill(); }
-          break;
-        }
-      }
+      if (!m.built) ctx.globalAlpha = 0.38; // still being built: see-through, with scaffolding (drawStatus)
+      Models.draw(tk, m, env);
       ctx.restore();
       drawStatus(state, m, blink, ctr, ht);
     }
 
-    // Building under construction / OFF / no power / no water / damaged: shown on the footprint diamond.
+    // Building under construction / OFF / no power / no water / damaged, shown on and above the building.
     function drawStatus(state, m, blink, ctr, ht) {
       const f = footprint(m.c, m.r, m.w, m.h, 0.04);
       const bar = (fr, color) => {
         const w = 30 * Math.min(m.w, 2), x = ctr.x - w / 2, y = ctr.y + HH * m.h * 0.55;
         ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x, y, w, 5);
-        ctx.fillStyle = color; ctx.fillRect(x, y, w * fr, 5);
+        ctx.fillStyle = color; ctx.fillRect(x, y, w * Math.max(0, Math.min(1, fr)), 5);
       };
-      const icon = (txt, size) => { ctx.font = `${size}px system-ui`; ctx.textAlign = 'center'; ctx.fillText(txt, ctr.x + HW * 0.45, ctr.y - ht - 4); };
+      let by = ctr.y - ht - 10; // badges stack upward above the building
+      const badge = (text, color) => { Models.badge(ctx, ctr.x, by, text, color); by -= 18; };
+      const needsPower = (C.modules[m.type].power || 0) > 0;
       ctx.save();
       if (!m.built) {
-        ctx.strokeStyle = '#ffd36b'; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; poly(f); ctx.stroke(); ctx.setLineDash([]);
-        bar(m.progress / C.modules[m.type].work, '#ffd36b');
+        const fr = m.progress / C.modules[m.type].work;
+        Models.scaffold(tk, m, fr);
+        bar(fr, '#ffd36b');
       } else if (!m.on) {
-        poly(f); ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
-        ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', ctr.x, ctr.y - ht - 4);
-      } else if (m.type !== 'solar' && m.type !== 'battery' && m.type !== 'shelter' && m.type !== 'tower' && !m.powered) {
-        poly(f); ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fill();
-        ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke();
-        if (blink) icon('⚡', 16);
-      } else if (m.noWater && blink) {
+        badge('OFF', '#a7b0bf');
+      } else if (needsPower && !m.powered) {
+        poly(f); ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke(); // red ring on the ground
+        if (blink) badge('⚡ NO POWER', '#ff5d5d'); else by -= 18;
+      } else if (m.noWater) {
         poly(f); ctx.strokeStyle = '#58c4ff'; ctx.lineWidth = 2; ctx.stroke();
-        icon('💧', 14);
+        if (blink) badge('💧 NO WATER', '#58c4ff'); else by -= 18;
+      } else if (m.type === 'shelter' && state.sheltering) {
+        badge('CREW INSIDE', '#7dff9a');
       }
-      if (m.built && m.damaged) { // damage from storms or meteors: cracks + wrench, and repair progress
-        poly(f); ctx.fillStyle = 'rgba(60,20,0,0.35)'; ctx.fill();
-        ctx.strokeStyle = 'rgba(255,170,90,0.9)'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(ctr.x - 14, ctr.y - 2); ctx.lineTo(ctr.x - 6, ctr.y + 2); ctx.lineTo(ctr.x - 8, ctr.y + 6); ctx.lineTo(ctr.x + 2, ctr.y + 9);
-        ctx.moveTo(ctr.x + 8, ctr.y - 6); ctx.lineTo(ctr.x + 15, ctr.y - 2); ctx.stroke();
-        if (m.repair || blink) icon('🔧', 13);
-        if (m.repair) bar(m.repair.progress / m.repair.work, '#ff9f45');
+      if (m.built && m.damaged) { // damage from storms or meteors: sparks, smoke, and a repair bar once a fix is ordered
+        if (Math.random() < 0.3) {
+          const x = ctr.x + (Math.random() - 0.5) * HW * 0.8 * m.w, y = ctr.y - ht * (0.45 + Math.random() * 0.5);
+          for (let i = 0; i < 2; i++) spawn(5, x, y, (Math.random() - 0.4) * 70, -Math.random() * 55 - 20, 0.45 + Math.random() * 0.35, Math.random() < 0.5 ? '#ffb347' : '#ffe08a');
+        }
+        if (Math.random() < 0.05) spawn(6, ctr.x + (Math.random() - 0.5) * 10, ctr.y - ht * 0.8, 4, -13, 2.4, 'rgba(72,72,78,1)');
+        ctx.strokeStyle = 'rgba(255,170,90,0.9)'; ctx.lineWidth = 1.4; // cracks
+        ctx.beginPath(); ctx.moveTo(ctr.x - 9, ctr.y - ht * 0.55); ctx.lineTo(ctr.x - 3, ctr.y - ht * 0.45); ctx.lineTo(ctr.x - 5, ctr.y - ht * 0.35); ctx.lineTo(ctr.x + 2, ctr.y - ht * 0.28); ctx.stroke();
+        if (m.repair) { bar(m.repair.progress / m.repair.work, '#ff9f45'); badge('🔧 FIXING', '#ff9f45'); }
+        else if (blink) badge('🔧 BROKEN', '#ff9f45');
       }
       ctx.restore();
     }
@@ -501,11 +370,15 @@
 
       // Object shadows point AWAY from the Sun, long and soft because the Sun is always low at the pole.
       const sg = sunGrid(state);
+      env.sun = Models.sunVector(MT.Sim.sunAz(state, state.hour + frac)); // the Sun the building models are lit by
+      env.charge = state.res.battery / (MT.Sim.batteryCap(state) || 1);
+      env.water = state.res.water / C.caps.water;
+      env.growth = Math.min(1, state.hour / 360); // greenhouse plants grow over the first 15 days
       for (const m of state.modules) {
         if (!m.built) continue;
         const L = lightAt(state, m);
         if (L < 0.02) continue;
-        const len = (m.type === 'hab' ? 1.1 : m.type === 'solar' || m.type === 'drill' || m.type === 'tower' ? 0.9 : 0.5) * (1 + (1 - L) * 1.5);
+        const len = Math.min(1.6, 0.7 * Models.height(m.type)) * (1 + (1 - L) * 1.5); // taller buildings cast longer shadows
         const f = footprint(m.c, m.r, m.w, m.h, m.type === 'hab' ? 0.3 : 0.25);
         const off = gridDir(-sg.c * len, -sg.r * len);
         const pts = f.map((p) => [p.x, p.y]);
@@ -532,6 +405,20 @@
         ctx.setLineDash(flow ? [6, 6] : m.type === 'shelter' ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
+      }
+      ctx.setLineDash([]); ctx.lineDashOffset = 0;
+
+      // water pipes (blue, beside the power cable): ice drill → habitat tanks → O₂ generator and greenhouses
+      ctx.lineWidth = 2.5;
+      for (const m of state.modules) {
+        if (!m.built || (m.type !== 'drill' && m.type !== 'o2gen' && m.type !== 'greenhouse')) continue;
+        const c = mid(m), makes = m.type === 'drill';
+        const flowing = m.on && m.powered && (makes || !m.noWater);
+        const dx = hc.x - c.x, dy = hc.y - c.y, d = Math.hypot(dx, dy) || 1, ox = (-dy / d) * 5, oy = (dx / d) * 5;
+        ctx.strokeStyle = flowing ? '#58c4ff' : m.noWater ? 'rgba(88,196,255,0.35)' : '#3a4656';
+        ctx.setLineDash(flowing ? [8, 5] : []);
+        ctx.lineDashOffset = (makes ? 1 : -1) * dashOffset * 0.7; // water moves toward the habitat from the drill, away from it to the users
+        ctx.beginPath(); ctx.moveTo(c.x + ox, c.y + oy); ctx.lineTo(hc.x + ox, hc.y + oy); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
 
@@ -608,6 +495,16 @@
           ctx.strokeStyle = '#ffe2b0'; ctx.lineWidth = 2;
           ctx.beginPath(); ctx.ellipse(p.x, p.y, 3 + t * 20, (3 + t * 20) / 2, 0, 0, Math.PI * 2); ctx.stroke();
           if (t < 0.25) { ctx.fillStyle = '#fff6e0'; ctx.beginPath(); ctx.arc(p.x, p.y, 5 * (1 - t * 4), 0, Math.PI * 2); ctx.fill(); }
+          ctx.globalAlpha = 1;
+        } else if (p.kind === 5) { // spark from a damaged building: falls back down
+          p.vy += 160 * dt;
+          ctx.globalAlpha = 1 - p.life / p.max;
+          ctx.fillStyle = p.color; ctx.fillRect(p.x - 1, p.y - 1, 2.2, 2.2);
+          ctx.globalAlpha = 1;
+        } else if (p.kind === 6) { // smoke puff: grows and fades
+          const t = p.life / p.max;
+          ctx.globalAlpha = 0.45 * (1 - t);
+          ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 3 + t * 9, 0, Math.PI * 2); ctx.fill();
           ctx.globalAlpha = 1;
         } else {
           ctx.globalAlpha = 1 - p.life / p.max;

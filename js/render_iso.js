@@ -10,6 +10,7 @@
   const MT = (root.MT = root.MT || {});
 
   const POOL_SIZE = 420;
+  const SUIT_LINE = '#1b2230', VISOR = '#1ea5e9'; // astronaut outline and helmet visor (same as render.js)
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
 
   function IsoRenderer(canvas) {
@@ -145,12 +146,12 @@
         g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
         g.fillRect(p.x, p.y, s, s);
       }
-      for (let i = 0; i < 23 * area; i++) {
-        const p = P(rand() * COLS, rand() * ROWS), rr = (4 + rand() ** 2 * 30) * 1.25;
-        g.beginPath(); g.ellipse(p.x, p.y, rr, rr / 2, 0, 0, Math.PI * 2); g.fillStyle = 'rgba(0,0,0,0.13)'; g.fill();
-        g.beginPath(); g.ellipse(p.x - rr * 0.12, p.y - rr * 0.06, rr * 0.85, rr * 0.42, 0, 0, Math.PI * 2); g.fillStyle = 'rgba(0,0,0,0.08)'; g.fill();
-        g.beginPath(); g.ellipse(p.x, p.y, rr, rr / 2, 0, Math.PI * 0.1, Math.PI * 0.9); g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1.5; g.stroke();
-      }
+      const base = document.createElement('canvas'); // the ground before craters (see drawCrater in render.js)
+      base.width = W; base.height = H; base.getContext('2d').drawImage(off, 0, 0);
+      const craters = [];
+      for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
+      craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
+      for (const k of craters) MT.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
       g.restore();
       g.save(); g.clip(paths.ice);
       for (let i = 0; i < 260 * area; i++) {
@@ -447,19 +448,28 @@
     function drawAstronaut(A, a, exposed, danger, blink, sel) {
       const p = P(a.c, a.r);
       a.x = p.x; a.y = p.y; // remembered for clicks (crewAt)
-      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 5, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+      // While walking they hop (like Apollo crews did in the Moon's low gravity); the shadow stays on the ground.
+      const hop = Math.abs(Math.sin(time * 9 + A.id)) * 4 * (a.walk || 0), y = p.y - hop, sh = 1 - hop / 10;
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 5.5 * sh, 2.7 * sh, 0, 0, Math.PI * 2); ctx.fill();
       if (sel) { // picked: pulsing gold ring on the ground
         const k = 1 + Math.sin(time * 5) * 0.15;
         ctx.beginPath(); ctx.ellipse(p.x, p.y, 11 * k, 5.5 * k, 0, 0, Math.PI * 2); ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
       }
       const body = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
-      ctx.fillStyle = body; ctx.beginPath(); ctx.roundRect(p.x - 3.5, p.y - 10, 7, 9, 3); ctx.fill(); // suit
-      ctx.beginPath(); ctx.arc(p.x, p.y - 12.5, 4, 0, Math.PI * 2); ctx.fill(); // helmet
-      ctx.beginPath(); ctx.arc(p.x + 1.2, p.y - 13, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill(); // visor
+      ctx.fillStyle = body; ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(p.x - 3.5, y - 12, 7, 11, 3.5); ctx.fill(); ctx.stroke(); // suit
+      const hy = y - 15;
+      ctx.beginPath(); ctx.arc(p.x, hy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); // helmet
+      const s = a.face === 1 ? -1 : 1; // the visor is drawn on the left (facing left); mirrored when walking right
+      ctx.save(); ctx.clip(); // visor: blue window on the front of the helmet
+      // a big round window: an oval that reaches just past the middle, its far side cut off by the helmet edge
+      ctx.fillStyle = VISOR; ctx.beginPath(); ctx.ellipse(p.x - 2.2 * s, hy, 3.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      ctx.beginPath(); ctx.arc(p.x, hy, 5, 0, Math.PI * 2); ctx.stroke(); // helmet outline back on top of the visor
       // number tag (border = role colour) so you can match the astronaut to the AMS list
-      ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(p.x - 6, p.y - 29, 12, 10, 3); ctx.fill();
+      ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(p.x - 6, p.y - 35, 12, 10, 3); ctx.fill();
       ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), p.x, p.y - 21.5);
+      ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), p.x, p.y - 27.5);
     }
 
     // ---------- the rover (TEMPORARY model: a small box on 4 wheels, to be replaced with better art later) ----------
@@ -692,7 +702,11 @@
         }
         if (!a.init) { a.c = tc; a.r = tr; a.init = true; }
         const dc = tc - a.c, dr = tr - a.r, d = Math.hypot(dc, dr), sp = (140 / 40) * dt; // same walking speed as the top-down map
-        if (d > sp) { a.c += (dc / d) * sp; a.r += (dr / d) * sp; } else { a.c = tc; a.r = tr; }
+        if (d > sp) {
+          a.c += (dc / d) * sp; a.r += (dr / d) * sp;
+          if (Math.abs(dc - dr) > d * 0.1) a.face = dc - dr > 0 ? 1 : -1; // on screen, x grows with c - r; straight up/down keeps the last way
+        } else { a.c = tc; a.r = tr; }
+        a.walk = Math.max(0, Math.min(1, (a.walk || 0) + (d > sp ? dt : -dt) * 6)); // 0..1: eases the hopping in and out
         const sel = picked === A;
         a.id = A.id;
         a.shown = !A.medbay && (visible || d * PX_PER_TILE >= 1 || sel); // the picked astronaut is always shown, even inside
@@ -786,7 +800,7 @@
       let best = null, bd = 12;
       for (const a of Object.values(crew)) {
         if (!a.shown || a.x == null) continue;
-        const d = Math.min(Math.hypot(a.x - wx, a.y - 8 - wy), Math.hypot(a.x - wx, a.y - 24 - wy));
+        const d = Math.min(Math.hypot(a.x - wx, a.y - 11 - wy), Math.hypot(a.x - wx, a.y - 30 - wy)); // the body or its number tag
         if (d < bd) { bd = d; best = a.id; }
       }
       return best;

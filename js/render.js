@@ -7,6 +7,40 @@
 
   const POOL_SIZE = 420;
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
+  const SUIT_LINE = '#1b2230', VISOR = '#1ea5e9'; // astronaut outline and helmet visor (same as render_iso.js)
+
+  // A small bowl-shaped crater, lit from the top-left (the ground is drawn once, so the light is fixed).
+  // Shared with render_iso.js, which squashes it into an oval (sy = 0.5).
+  // base = a copy of the ground before any craters. Where craters overlap, the newer one first puts that
+  // plain ground back under itself, so it cleanly covers the older one (like a new impact on an old crater).
+  function drawCrater(g, x, y, r, sy, base) {
+    const R = r * 1.15, x0 = Math.max(0, Math.floor(x - R)), y0 = Math.max(0, Math.floor(y - R * sy));
+    const w = Math.min(base.width, Math.ceil(x + R)) - x0, h = Math.min(base.height, Math.ceil(y + R * sy)) - y0;
+    if (w > 0 && h > 0) {
+      g.save(); g.beginPath(); g.ellipse(x, y, R, R * sy, 0, 0, Math.PI * 2); g.clip();
+      g.drawImage(base, x0, y0, w, h, x0, y0, w, h); g.restore();
+    }
+    g.save(); g.translate(x, y); g.scale(1, sy);
+    craterShape(g, r);
+    g.restore();
+  }
+  function craterShape(g, r) {
+    const x = 0, y = 0; // drawn around (0, 0); drawCrater moves (and squashes) it into place
+    g.beginPath(); g.arc(x, y, r * 1.15, 0, Math.PI * 2); g.fillStyle = 'rgba(255,255,255,0.05)'; g.fill(); // raised rim / thrown-out dust
+    // bowl: the top-left inner wall faces away from the Sun (dark), the bottom-right one faces it (light)
+    const bowl = g.createLinearGradient(x - r * 0.7, y - r * 0.7, x + r * 0.7, y + r * 0.7);
+    bowl.addColorStop(0, 'rgba(0,0,0,0.4)'); bowl.addColorStop(0.55, 'rgba(0,0,0,0.14)'); bowl.addColorStop(1, 'rgba(255,255,255,0.1)');
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = bowl; g.fill();
+    // shadow the rim casts into the bowl: a dark crescent along the top-left inside edge
+    g.save(); g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.clip();
+    g.beginPath(); g.rect(x - r, y - r, r * 2, r * 2); g.arc(x + r * 0.3, y + r * 0.3, r * 0.95, 0, Math.PI * 2, true);
+    g.fillStyle = 'rgba(0,0,0,0.22)'; g.fill(); g.restore();
+    // rim edges: sunlit on the top-left, a faint shadow on the far side
+    g.lineWidth = Math.max(1, r * 0.08);
+    g.beginPath(); g.arc(x, y, r * 1.04, Math.PI * 0.85, Math.PI * 1.65); g.strokeStyle = 'rgba(255,255,255,0.2)'; g.stroke();
+    g.beginPath(); g.arc(x, y, r * 1.1, -Math.PI * 0.15, Math.PI * 0.65); g.strokeStyle = 'rgba(0,0,0,0.12)'; g.stroke();
+  }
+  MT.drawCrater = drawCrater;
 
   function Renderer(canvas, forecastCanvas) {
     const C = MT.CONFIG, T = C.map.tile;
@@ -103,15 +137,12 @@
         g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
         g.fillRect(x, y, s, s);
       }
-      for (let i = 0; i < 46 * area; i++) {
-        const x = rand() * W, y = rand() * H, r = 4 + rand() ** 2 * 30;
-        g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
-        g.fillStyle = 'rgba(0,0,0,0.13)'; g.fill();
-        g.beginPath(); g.arc(x - r * 0.15, y - r * 0.15, r * 0.85, 0, Math.PI * 2);
-        g.fillStyle = 'rgba(0,0,0,0.08)'; g.fill();
-        g.beginPath(); g.arc(x, y, r, Math.PI * 0.1, Math.PI * 0.9);
-        g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1.5; g.stroke();
-      }
+      const base = document.createElement('canvas'); // the ground before craters (see drawCrater)
+      base.width = W; base.height = H; base.getContext('2d').drawImage(off, 0, 0);
+      const craters = [];
+      for (let i = 0; i < 46 * area; i++) craters.push({ x: rand() * W, y: rand() * H, r: 4 + rand() ** 2 * 30 });
+      craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
+      for (const k of craters) drawCrater(g, k.x, k.y, k.r, 1, base);
       g.save(); g.clip(zonePaths.ice);
       for (let i = 0; i < 260 * area; i++) {
         g.fillStyle = `rgba(170,210,255,${0.15 + rand() * 0.35})`;
@@ -524,7 +555,7 @@
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
         const i = A.id - 1;
-        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, init: false });
+        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2, init: false }); // dir: way the visor faces
         if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
         const homeC = center(MT.Sim.homeOf(state, A));
         let tx = homeC.x + Math.cos(i * 1.57 + 0.8) * 9, ty = homeC.y + Math.sin(i * 1.57 + 0.8) * 9;
@@ -546,19 +577,26 @@
         }
         if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
-        if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; } else { a.x = tx; a.y = ty; }
+        if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; a.dir = Math.atan2(dy, dx); } else { a.x = tx; a.y = ty; }
         const sel = picked === A;
         a.id = A.id;
         a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
         const exposed = MT.Sim.isExposed(A);
         if (sel) { // picked: pulsing gold ring
-          ctx.beginPath(); ctx.arc(a.x, a.y, 9 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
+          ctx.beginPath(); ctx.arc(a.x, a.y, 10 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
           ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
         }
-        ctx.beginPath(); ctx.arc(a.x, a.y, 4.5, 0, Math.PI * 2);
+        // helmet seen from above, with the blue visor on the side they are walking towards
+        ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.dir);
+        ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2);
         ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
-        ctx.beginPath(); ctx.arc(a.x + 1.2, a.y - 1, 2, 0, Math.PI * 2); ctx.fillStyle = '#f5a623'; ctx.fill();
+        // visor: a rounded window on the front half, with a white rim of helmet left around it
+        ctx.save(); ctx.beginPath(); ctx.arc(0, 0, 4.7, 0, Math.PI * 2); ctx.clip();
+        ctx.fillStyle = VISOR; ctx.beginPath(); ctx.roundRect(0.9, -3.9, 4.4, 7.8, 1.5); ctx.fill(); ctx.restore();
+        ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); // the helmet outline again (the visor path replaced it)
+        ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
         // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
         ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();

@@ -2,23 +2,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 require('../js/config.js');
 require('../js/sim.js');
-const S = globalThis.MT.Sim;
+const S = globalThis.LW.Sim;
 
 function setup() {
   const state = S.create({ scenario: 'training', seed: 1 });
   state.res.parts = 999;
-  const base = MT.CONFIG.base;
+  const base = LW.CONFIG.base;
   const second = S.place(state, 'hab', base.c + 12, base.r + 6);
   assert.ok(second.ok);
   second.m.built = true;
-  second.m.progress = MT.CONFIG.modules.hab.work;
+  second.m.progress = LW.CONFIG.modules.hab.work;
   assert.ok(S.buyRover(state).ok);
   return state;
 }
 
 test('rover detours around buildings and construction sites, then parks outside the destination', () => {
   const state = setup(), [first, second] = S.habs(state);
-  const base = MT.CONFIG.base;
+  const base = LW.CONFIG.base;
   for (let r = base.r; r < base.r + 10; r++) {
     assert.ok(S.place(state, 'solar', base.c + 6, r).ok);
   }
@@ -84,6 +84,8 @@ test('parking and active routes stay clear of new construction, including older 
 test('2.5D rover dips into the drawn crater and rises smoothly out, including its wheel tilt', () => {
   globalThis.window = globalThis;
   require('../js/iso.js');
+  require('../js/shapes.js'); // building signs used by both renderers
+  require('../js/crew_motion.js'); // astronaut positions shared by both views
   require('../js/render.js');
   require('../js/render_iso.js');
   const craters = [], roofs = [];
@@ -106,33 +108,33 @@ test('2.5D rover dips into the drawn crater and rises smoothly out, including it
     lineTo() {}
     closePath() {}
   };
-  const originalCrater = MT.drawCrater, originalPosition = S.roverPosition;
+  const originalCrater = LW.drawCrater, originalPosition = S.roverPosition;
   let position = null;
   try {
-    MT.drawCrater = (ctx, x, y, radius) => craters.push({ x, y, radius });
+    LW.drawCrater = (ctx, x, y, radius) => craters.push({ x, y, radius });
     S.roverPosition = () => position;
-    const renderer = MT.IsoRenderer(canvas());
+    const renderer = LW.IsoRenderer(canvas());
     const state = S.create({ scenario: 'training', seed: 1 });
     renderer.draw(state, 0.1, {});
     const crater = craters.find(candidate => candidate.radius > 20 && [-1.2, 0, 1.2].every(offset =>
       craters.every(other => other === candidate || Math.hypot((candidate.x + offset * candidate.radius - other.x) / other.radius, (candidate.y - other.y) / (other.radius * 0.5)) > 1.15)));
     assert.ok(crater, 'generated terrain contains a clear crater for the crossing');
     const depths = [];
-    const halfWidth = MT.Iso.TILE_W / 2, halfHeight = MT.Iso.TILE_H / 2;
+    const halfWidth = LW.Iso.TILE_W / 2, halfHeight = LW.Iso.TILE_H / 2;
     const terraceStep = 14;
-    const topOffset = Math.max(0, ...MT.CONFIG.features.map(feature => feature.height || 0)) * terraceStep;
+    const topOffset = Math.max(0, ...LW.CONFIG.features.map(feature => feature.height || 0)) * terraceStep;
     let tilted = false;
     for (let sample = 0; sample <= 48; sample++) {
       const x = crater.x + (sample / 48 * 2.4 - 1.2) * crater.radius;
       const y = crater.y;
-      const colsAxis = (x - MT.CONFIG.map.rows * halfWidth) / halfWidth, rowsAxis = (y - topOffset) / halfHeight;
+      const colsAxis = (x - LW.CONFIG.map.rows * halfWidth) / halfWidth, rowsAxis = (y - topOffset) / halfHeight;
       position = { c: (colsAxis + rowsAxis) / 2, r: (rowsAxis - colsAxis) / 2, dir: { c: 1, r: 0 }, moving: true };
       roofs.length = 0;
       const before = JSON.stringify(state);
       renderer.draw(state, 0.1, { paused: true });
       assert.equal(JSON.stringify(state), before);
       const roof = roofs.at(-1);
-      const groundY = y - MT.CONFIG.heightAt(Math.floor(position.c), Math.floor(position.r)) * terraceStep;
+      const groundY = y - LW.CONFIG.heightAt(Math.floor(position.c), Math.floor(position.r)) * terraceStep;
       const depth = roof.reduce((sum, point) => sum + point[1], 0) / 4 - (groundY - 8);
       depths.push(depth);
       const frontBack = (roof[0][1] + roof[1][1] - roof[2][1] - roof[3][1]) / 2;
@@ -143,7 +145,7 @@ test('2.5D rover dips into the drawn crater and rises smoothly out, including it
     for (let sample = 1; sample < depths.length; sample++) assert.ok(Math.abs(depths[sample] - depths[sample - 1]) < 2, 'crossing stays smooth');
     assert.ok(tilted, 'wheel height follows the slope');
   } finally {
-    MT.drawCrater = originalCrater;
+    LW.drawCrater = originalCrater;
     S.roverPosition = originalPosition;
   }
 });

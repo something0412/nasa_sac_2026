@@ -10,10 +10,12 @@
 // show the last picture we received (saved in localStorage), or a "no signal" message.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const FEED = 'https://science.nasa.gov/wp-json/wp/v2/apod-basic?per_page=10';
-  const STORE_KEY = 'mt-apod-last';
+  const STORE_KEY = 'lunar-world.apod-last';
+  // Settings used to be stored as 'mt-apod-last' (old name of the game); move them over once.
+  try { if (localStorage.getItem(STORE_KEY) === null && localStorage.getItem('mt-apod-last') !== null) { localStorage.setItem(STORE_KEY, localStorage.getItem('mt-apod-last')); localStorage.removeItem('mt-apod-last'); } } catch (e) { /* storage blocked: fine */ }
   const FRESH_MS = 30 * 60 * 1000; // re-check the feed at most every 30 minutes
 
   // ---------------------------------------------------------------- data ----
@@ -354,5 +356,5 @@
     return { destroy() { gone = true; if (lensView) lensView.destroy(); } };
   }
 
-  MT.APOD = { latest, show, _pick: pick, _archivePicture: archivePicture, _yymmdd: yymmdd };
+  LW.APOD = { latest, show, _pick: pick, _archivePicture: archivePicture, _yymmdd: yymmdd };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -3,7 +3,7 @@
 // picks which part we see. Drag the map to move the camera.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const POOL_SIZE = 420;
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
@@ -40,10 +40,14 @@
     g.beginPath(); g.arc(x, y, r * 1.04, Math.PI * 0.85, Math.PI * 1.65); g.strokeStyle = 'rgba(255,255,255,0.2)'; g.stroke();
     g.beginPath(); g.arc(x, y, r * 1.1, -Math.PI * 0.15, Math.PI * 0.65); g.strokeStyle = 'rgba(0,0,0,0.12)'; g.stroke();
   }
-  MT.drawCrater = drawCrater;
+  LW.drawCrater = drawCrater;
 
-  function Renderer(canvas, forecastCanvas) {
-    const C = MT.CONFIG, T = C.map.tile;
+  // motion: shared astronaut positions (js/crew_motion.js). view.js passes one shared object to both views;
+  // without it this view keeps its own (used by tests and if render.js is used on its own).
+  function Renderer(canvas, forecastCanvas, motion) {
+    const ownMotion = !motion || typeof motion.update !== 'function';
+    if (ownMotion) motion = LW.CrewMotion();
+    const C = LW.CONFIG, T = C.map.tile;
     const W = C.map.cols * T, H = C.map.rows * T; // world size
     let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
     // ZOOM: 1 = normal, 2 = everything twice as big. The camera then sees VW / zoom world pixels across.
@@ -54,12 +58,12 @@
     const ctx = canvas.getContext('2d');
     const fctx = forecastCanvas.getContext('2d');
 
+    let needCenter = true; // look at the base on the first frame of a game
     let ground = null, zonePaths = null;
     let crew = {}; // astronaut id -> where their dot is drawn (world pixels), also used to click on them
     const pool = [];
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
     let time = 0, dashOffset = 0, frac = 0;
-    let workTime = 0;
     const cam = { x: 0, y: 0, tx: 0, ty: 0, flying: false };
     let tagRect = null; // where the "back to base" tag was drawn (canvas pixels), for clicks
 
@@ -129,7 +133,7 @@
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
       zonePaths = { ridge: new Path2D(), plain: new Path2D(), ice: new Path2D() };
       for (let r = 0; r < C.map.rows; r++) for (let c = 0; c < C.map.cols; c++) {
-        zonePaths[MT.Sim.zoneOf(state, c, r)].rect(c * T, r * T, T, T);
+        zonePaths[LW.Sim.zoneOf(state, c, r)].rect(c * T, r * T, T, T);
       }
       for (const z of ['plain', 'ridge', 'ice']) { g.fillStyle = C.zones[z].color; g.fill(zonePaths[z]); }
       const area = (W * H) / (800 * 560);
@@ -144,6 +148,7 @@
       for (let i = 0; i < 46 * area; i++) craters.push({ x: rand() * W, y: rand() * H, r: 4 + rand() ** 2 * 30 });
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
       for (const k of craters) drawCrater(g, k.x, k.y, k.r, 1, base);
+      base.width = base.height = 0; // free the big temporary copy (~27 MB) right away
       g.save(); g.clip(zonePaths.ice);
       for (let i = 0; i < 260 * area; i++) {
         g.fillStyle = `rgba(170,210,255,${0.15 + rand() * 0.35})`;
@@ -172,10 +177,10 @@
     const center = (m) => ({ x: (m.c + m.w / 2) * T, y: (m.r + m.h / 2) * T });
     // Direction the sunlight comes FROM (unit vector, screen coords). Smooth between game hours.
     const sunVec = (state) => {
-      const a = (MT.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
+      const a = (LW.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
       return { x: Math.cos(a), y: Math.sin(a) };
     };
-    const lightAt = (state, m) => MT.Sim.zoneLight(state, MT.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
+    const lightAt = (state, m) => LW.Sim.zoneLight(state, LW.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
 
     function hull(pts) {
       pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -212,7 +217,7 @@
             ctx.fillRect(cx + Math.cos(a) * 25 - 3, cy + Math.sin(a) * 25 - 3, 6, 6);
           }
           ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
-          ctx.fillText(MT.Sim.habs(state).length > 1 && m.built ? MT.Sim.habName(state, m) : 'HAB', cx, cy + 4);
+          ctx.fillText(LW.Sim.habs(state).length > 1 && m.built ? LW.Sim.habName(state, m) : 'HAB', cx, cy + 4);
           break;
         }
         case 'solar': {
@@ -229,7 +234,7 @@
           break;
         }
         case 'battery': {
-          const cap = MT.Sim.batteryCap(state) || 1;
+          const cap = LW.Sim.batteryCap(state) || 1;
           const f = state.res.battery / cap;
           ctx.fillStyle = '#2a2f38'; ctx.fillRect(x + 8, y + 7, 24, 28);
           ctx.fillStyle = '#596273'; ctx.fillRect(x + 15, y + 4, 10, 4);
@@ -294,12 +299,12 @@
           ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -10, 5, 10); // slit
           ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 7); // telescope tube
           ctx.restore();
-          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          if (m.built && blink && !LW.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
           break;
         }
         case 'pad': {
           // Landing Pad: round platform with an "H" and corner lights (blinking = ready for a spaceship).
-          const ready = m.built && MT.Sim.landingSpots(state).some((sp) => sp.pad === m);
+          const ready = m.built && LW.Sim.landingSpots(state).some((sp) => sp.pad === m);
           ctx.fillStyle = '#5d5f66'; ctx.beginPath(); ctx.arc(cx, cy, 34, 0, Math.PI * 2); ctx.fill();
           ctx.strokeStyle = '#9aa2af'; ctx.lineWidth = 2; ctx.stroke();
           ctx.strokeStyle = '#d9dde4'; ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.arc(cx, cy, 26, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
@@ -328,7 +333,7 @@
 
       // Research boost: small "2x" badge on machines that get an upgrade (close enough to a Research Bay).
       if (m.built && C.research.targets.includes(m.type)) {
-        const b = MT.Sim.boostOf(state, m);
+        const b = LW.Sim.boostOf(state, m);
         if (b > 1) {
           ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x + 2, y + 2, 20, 11, 3); ctx.fill();
           ctx.fillStyle = '#6fd3ff'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(b + 'x', x + 12, y + 10.5);
@@ -349,7 +354,7 @@
       } else if (!m.on) {
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y, w, h);
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', x + w / 2, y + h / 2 + 4);
-      } else if (MT.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
+      } else if (LW.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
         ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fillRect(x, y, w, h);
         if (blink) { ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillText('⚡', x + w - 9, y + 15); }
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
@@ -376,11 +381,12 @@
       }
     }
 
+    // Gerardo's construction mallet, swung by an Engineer standing at a building site (top-down).
     function drawBuildingHammer(a, m) {
       const x = a.x - 3, y = a.y - 8; // right-hand side of the left-facing astronaut
       const targetX = (m.c + m.w) * T - 1;
       const reach = x - targetX;
-      const cycle = (workTime * 1.4 + a.id * 0.17) % 1;
+      const cycle = (motion.workTime() * 1.4 + a.id * 0.17) % 1;
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(Math.PI + Math.sin(cycle * Math.PI));
@@ -439,8 +445,8 @@
 
     // ---------- main draw ----------
     function draw(state, dt, ui) {
-      if (!ui.paused && state.status === 'running') workTime += dt;
-      if (!ground) { buildGround(state); centerOnBase(state, false); }
+      if (!ground) buildGround(state);
+      if (needCenter) { centerOnBase(state, false); needCenter = false; }
       frac = ui.frac || 0;
       time += dt;
       dashOffset -= dt * 28;
@@ -452,7 +458,7 @@
       const blink = Math.floor(time * 2.5) % 2 === 0;
       const habM = state.modules.find((m) => m.type === 'hab');
       const hc = center(habM);
-      const habCs = MT.Sim.habs(state).map(center);
+      const habCs = LW.Sim.habs(state).map(center);
       const nearestHab = (p) => habCs.reduce((b, h) => (Math.hypot(h.x - p.x, h.y - p.y) < Math.hypot(b.x - p.x, b.y - p.y) ? h : b), hc);
 
 
@@ -471,23 +477,27 @@
       const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(C.map.cols - 1, Math.floor((cam.x + VWz) / T));
       const r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(C.map.rows - 1, Math.floor((cam.y + VHz) / T));
       const shadeOf = {
-        ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
-        plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
+        ridge: 0.75 * (1 - LW.Sim.zoneLight(state, 'ridge', state.hour + frac)),
+        plain: 0.75 * (1 - LW.Sim.zoneLight(state, 'plain', state.hour + frac)),
         ice: 0.35,
       };
       for (const z of ['ridge', 'plain', 'ice']) {
         if (shadeOf[z] < 0.005) continue;
         ctx.fillStyle = z === 'ice' ? 'rgba(5,8,25,0.35)' : `rgba(5,8,20,${shadeOf[z].toFixed(3)})`;
         for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-          if (MT.Sim.zoneOf(state, c, r) === z) ctx.fillRect(c * T, r * T, T, T);
+          if (LW.Sim.zoneOf(state, c, r) === z) ctx.fillRect(c * T, r * T, T, T);
         }
       }
 
       // Object shadows point AWAY from the Sun. The Sun is always low at the pole, so shadows are long;
       // as the Sun sinks behind a hill they stretch and fade out.
+      // Only draw what the camera can see (+ a margin for long shadows, labels and icons), so a big base stays fast.
+      const MARGIN = 120, vx0 = cam.x - MARGIN, vy0 = cam.y - MARGIN, vx1 = cam.x + VWz + MARGIN, vy1 = cam.y + VHz + MARGIN;
+      const onScreen = (m) => (m.c + m.w) * T >= vx0 && m.c * T <= vx1 && (m.r + m.h) * T >= vy0 && m.r * T <= vy1;
+      const lineOnScreen = (a, b) => Math.max(a.x, b.x) >= vx0 && Math.min(a.x, b.x) <= vx1 && Math.max(a.y, b.y) >= vy0 && Math.min(a.y, b.y) <= vy1;
       const sv = sunVec(state);
       for (const m of state.modules) {
-        if (!m.built || m.type === 'pad') continue; // (flat pads cast no shadow)
+        if (!m.built || m.type === 'pad' || !onScreen(m)) continue; // (flat pads cast no shadow)
         const L = lightAt(state, m);
         if (L < 0.02) continue;
         const pad = m.type === 'hab' ? 10 : 8;
@@ -511,24 +521,25 @@
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
-        } else if (m.type === 'shelter' || !MT.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
+        } else if (m.type === 'shelter' || !LW.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
         else { color = !m.on ? '#4a4f5a' : m.powered ? '#ffd36b' : '#ff5d5d'; flow = m.on && m.powered ? -1 : 0; }
         ctx.strokeStyle = color;
-        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
+        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !LW.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
         const to = m.type === 'hab' ? hc : nearestHab(c);
+        if (!lineOnScreen(c, to)) continue; // a cable can cross the screen even if both ends are off it
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(to.x, to.y); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
 
-      for (const m of state.modules) drawModule(state, m, blink);
+      for (const m of state.modules) if (onScreen(m)) drawModule(state, m, blink);
 
       // Research Bay reach (dashed circle): while placing one, hovering one, or with the Scientist picked.
       const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
-      const hoverM = ui.hover && !ui.buildType ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
+      const hoverM = ui.hover && !ui.buildType ? LW.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
       const rings = [];
       if (ui.buildType === 'lab' && ui.hover) rings.push({ x: (ui.hover.c + 0.5) * T, y: (ui.hover.r + 0.5) * T });
-      for (const l of MT.Sim.built(state, 'lab')) {
+      for (const l of LW.Sim.built(state, 'lab')) {
         if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...center(l), dead: l.damaged });
       }
       // Placing a Landing Pad: gold circles show how close to a HAB it must be.
@@ -555,7 +566,7 @@
         ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       // The picked Engineer's job sites get a dashed outline in their role colour.
-      const jobs = MT.Sim.jobList(state);
+      const jobs = LW.Sim.jobList(state);
       if (picked) {
         ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
         for (const j of jobs) if (j.assignee === picked.id) {
@@ -567,46 +578,29 @@
 
       drawRover(state);
 
-      // astronauts: each one walks to where the AMS says they are (job site, gym, lab, greenhouse, tower, shelter or their HAB)
-      const shelters = MT.Sim.built(state, 'shelter');
+      // astronauts: where they stand comes from the shared crew motion (js/crew_motion.js, grid squares),
+      // so they keep walking from the same spot when the player switches views.
+      if (ownMotion) motion.update(state, dt, ui.paused);
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
-        const i = A.id - 1;
-        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2, init: false }); // dir: way the visor faces
-        if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
-        const homeC = center(MT.Sim.homeOf(state, A));
-        const job = jobs.find((j) => j.key === A.job);
-        let tx = homeC.x + Math.cos(i * 1.57 + 0.8) * 9, ty = homeC.y + Math.sin(i * 1.57 + 0.8) * 9;
-        let visible = false;
-        // Shelter: the one closest to their HAB.
-        const shelter = shelters.reduce((b, s) => (!b || Math.hypot(center(s).x - homeC.x, center(s).y - homeC.y) < Math.hypot(center(b).x - homeC.x, center(b).y - homeC.y) ? s : b), null);
-        if (A.where === 'shelter' && shelter) { const s = center(shelter); tx = s.x - 9 + (i % 4) * 6; ty = s.y + 12; visible = true; }
-        else if (A.where === 'gym') {
-          const g = state.modules.find((m) => m.id === A.gymId);
-          if (g) { const gc = center(g); tx = gc.x; ty = gc.y + 13; visible = true; }
-        } else if (A.task && A.where === A.task.kind) { // Research Bay, greenhouse or Astronomy Tower
-          const tm = state.modules.find((m) => m.id === A.task.id);
-          if (tm) { const c = center(tm); tx = c.x + Math.sin(time * 1.5 + i) * 2; ty = c.y + 14; visible = true; }
-        } else if (A.where === 'outside') {
-          const bc = job && job.m ? center(job.m) : homeC; // moon-dirt shield: walk around that HAB
-          const jc = job && job.m && job.kind !== 'berm' ? center(job.m) : { x: bc.x + Math.cos(time * 0.4 + i * 3) * 42, y: bc.y + Math.sin(time * 0.4 + i * 3) * 42 };
-          tx = jc.x + Math.sin(time * 3 + i) * 3; ty = jc.y + 15; visible = true;
-          if (job?.kind === 'module') { tx = (job.m.c + job.m.w) * T + 15; ty = jc.y; }
-        }
-        if (!a.init) { a.x = tx; a.y = ty; a.init = true; }
-        const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy), sp = 140 * dt;
-        if (d > sp) { a.x += (dx / d) * sp; a.y += (dy / d) * sp; a.dir = Math.atan2(dy, dx); } else { a.x = tx; a.y = ty; }
-        const building = state.status === 'running' && job?.active && job.kind === 'module' && Math.hypot(tx - a.x, ty - a.y) < 3;
+        const p = motion.get(A.id);
+        if (!p || A.trip) return; // inside the rover (they appear at the new HAB when it arrives)
+        const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2 });
+        a.x = p.c * T; a.y = p.r * T; a.dir = p.dir; // grid squares -> world pixels; dir = way the visor faces
+        // Hammering a building site: face the building. The top-down mallet needs a bit more room than the
+        // shared spot (8 px from the wall), so slide out to 15 px, eased in as they stop walking (no jump).
+        const building = p.building ? state.modules.find((m) => m.id === p.building) : null;
         if (building) {
-          const target = center(job.m);
+          a.x += (15 - 0.2 * T) * (1 - p.walk);
+          const target = center(building);
           a.dir = Math.atan2(target.y - a.y, target.x - a.x);
         }
         const sel = picked === A;
         a.id = A.id;
-        a.shown = !A.medbay && (visible || d >= 1 || sel); // the picked astronaut is always shown, even inside
+        a.shown = !A.medbay && (p.visible || p.dist * T >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
-        const exposed = MT.Sim.isExposed(A);
+        const exposed = LW.Sim.isExposed(A);
         if (sel) { // picked: pulsing gold ring
           ctx.beginPath(); ctx.arc(a.x, a.y, 10 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
           ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
@@ -614,14 +608,14 @@
         // helmet seen from above, with the blue visor on the side they are walking towards
         ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.dir);
         ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2);
-        ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
+        ctx.fillStyle = exposed && danger && blink ? '#ff5d5d' : LW.Sim.isSlow(A) ? '#ffc04d' : '#ffffff'; ctx.fill();
         // visor: a rounded window on the front half, with a white rim of helmet left around it
         ctx.save(); ctx.beginPath(); ctx.arc(0, 0, 4.7, 0, Math.PI * 2); ctx.clip();
         ctx.fillStyle = VISOR; ctx.beginPath(); ctx.roundRect(0.9, -3.9, 4.4, 7.8, 1.5); ctx.fill(); ctx.restore();
         ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); // the helmet outline again (the visor path replaced it)
         ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1; ctx.stroke();
         ctx.restore();
-        if (building) drawBuildingHammer(a, job.m);
+        if (building) drawBuildingHammer(a, building);
         // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
         ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
@@ -682,13 +676,13 @@
         const { c, r } = ui.hover;
         if (ui.buildType) {
           const d = C.modules[ui.buildType];
-          const ok = MT.Sim.canPlace(state, ui.buildType, c, r).ok;
+          const ok = LW.Sim.canPlace(state, ui.buildType, c, r).ok;
           ctx.fillStyle = ok ? 'rgba(95,224,138,0.25)' : 'rgba(255,93,93,0.25)';
           ctx.fillRect(c * T, r * T, d.w * T, d.h * T);
           ctx.strokeStyle = ok ? '#5fe08a' : '#ff5d5d'; ctx.lineWidth = 2; ctx.strokeRect(c * T + 1, r * T + 1, d.w * T - 2, d.h * T - 2);
           ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(d.icon, c * T + T / 2, r * T + T / 2 + 7);
         } else {
-          const m = MT.Sim.moduleAt(state, c, r);
+          const m = LW.Sim.moduleAt(state, c, r);
           ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
           if (m) ctx.strokeRect(m.c * T + 1, m.r * T + 1, m.w * T - 2, m.h * T - 2);
           else ctx.strokeRect(c * T + 1, r * T + 1, T - 2, T - 2);
@@ -742,7 +736,7 @@
         const y = top + i * (rowH + gap);
         fctx.fillStyle = '#c9d1dc'; fctx.font = '10px system-ui'; fctx.textAlign = 'left'; fctx.fillText(label, 2, y + 9);
         for (let h = ws; h < ws + total; h++) {
-          let c = mix(dark, sun, MT.Sim.zoneLight(state, z, h + 0.5));
+          let c = mix(dark, sun, LW.Sim.zoneLight(state, z, h + 0.5));
           if (h < state.hour) c = mix(c, [16, 20, 28], 0.5); // the past is dimmed
           fctx.fillStyle = rgb(c);
           fctx.fillRect(X(h), y, w / total + 0.6, rowH);
@@ -772,7 +766,12 @@
       fctx.beginPath(); fctx.moveTo(nx, rowsBottom); fctx.lineTo(nx - 4, rowsBottom + 6); fctx.lineTo(nx + 4, rowsBottom + 6); fctx.fill();
     }
 
-    function reset() { ground = null; tagRect = null; zoom = 1; workTime = 0; for (const p of pool) p.alive = false; }
+    // New game. The ground picture is kept: the terrain is the same in every game (it comes from the config),
+    // and painting it again takes long enough to freeze the game. Call rebuildGround() if the map ever changes.
+    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; if (ownMotion) motion.reset(); for (const p of pool) p.alive = false; }
+    function rebuildGround() { ground = null; }
+    /** Paint the ground picture now (if not done yet), so showing this view later does not freeze the game. */
+    function prepare(state) { if (!ground && state) buildGround(state); }
     /** The astronaut drawn under the mouse (id), or null. */
     function crewAt(evt) {
       const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels
@@ -786,12 +785,12 @@
     }
 
     return {
-      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
+      draw, drawForecast, tileAt, toCanvas, hitTag, crewAt, reset, rebuildGround, prepare, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
       panTo: (x, y) => moveTo(x, y),
     };
   }
 
-  MT.Renderer = Renderer;
+  LW.Renderer = Renderer;
 })(window);

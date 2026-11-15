@@ -2,9 +2,9 @@
 // "REAL" = from a NASA/science source. "GAME" = tuned for fun, but in a realistic range.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
-  MT.CONFIG = {
+  LW.CONFIG = {
     // ENDLESS: the game keeps going until no astronaut is left on the Moon. The world (space weather,
     // sunlight forecast, meteor showers) is made 30 days (chunkH) at a time, as the game goes on.
     chunkH: 720,

@@ -5,6 +5,7 @@ globalThis.window = globalThis;
 require('../js/config.js');
 require('../js/iso.js');
 require('../js/sim.js');
+require('../js/crew_motion.js'); // shared astronaut positions used by both views
 require('../js/render.js');
 require('../js/render_iso.js');
 
@@ -36,8 +37,8 @@ for (const view of ['Renderer', 'IsoRenderer']) {
       closePath() {}
     };
     const canvas = canvasProbe();
-    const renderer = MT[view](canvas, canvasProbe());
-    const state = MT.Sim.create({ scenario: 'training', seed: 1 });
+    const renderer = LW[view](canvas, canvasProbe());
+    const state = LW.Sim.create({ scenario: 'training', seed: 1 });
     const head = () => canvas.calls.find(call => call.color === '#c6d0dd');
     let workTime = 0;
     function draw(paused = false, dt = 0.1) {
@@ -50,16 +51,16 @@ for (const view of ['Renderer', 'IsoRenderer']) {
     draw();
     assert.equal(head(), undefined);
     let site = null;
-    const base = MT.CONFIG.base;
+    const base = LW.CONFIG.base;
     for (let r = base.r - 4; r <= base.r + 4 && !site; r++) {
       for (let c = base.c - 4; c <= base.c + 4 && !site; c++) {
-        if (!MT.Sim.canPlace(state, 'solar', c, r).ok) continue;
-        assert.ok(MT.Sim.place(state, 'solar', c, r).ok);
+        if (!LW.Sim.canPlace(state, 'solar', c, r).ok) continue;
+        assert.ok(LW.Sim.place(state, 'solar', c, r).ok);
         site = state.modules.find(module => !module.built);
       }
     }
     assert.ok(site);
-    MT.Sim.step(state);
+    LW.Sim.step(state);
     draw();
     assert.equal(head(), undefined, 'no hammer swing while walking to the site');
     for (let frame = 0; frame < 40; frame++) draw();
@@ -75,7 +76,7 @@ for (const view of ['Renderer', 'IsoRenderer']) {
       assert.ok(hammerOrigin[1] <= helmetOrigin[1] - 7, 'hammer arm stays to the astronaut\'s right, clear of the visor');
     } else {
       const visor = canvas.calls.find(call => call.name === 'ellipse' && call.color === '#1ea5e9');
-      const position = MT.Iso.toScreen(site.c + site.w + 0.2, site.r + site.h / 2, MT.CONFIG.map.rows);
+      const position = LW.Iso.toScreen(site.c + site.w + 0.2, site.r + site.h / 2, LW.CONFIG.map.rows);
       assert.ok(visor.args[0] < position.x, 'visor is on the building-facing side of the helmet');
     }
     const width = view === 'Renderer' ? 32 : 30;
@@ -115,12 +116,12 @@ for (const view of ['Renderer', 'IsoRenderer']) {
       const impactTime = (Math.ceil(workTime * 1.4 + phaseOffset) - phaseOffset) / 1.4;
       draw(false, impactTime - workTime);
       assert.notDeepEqual(head().path, restCorners, 'mallet tilts from its upright pose into the strike');
-      const contact = MT.Iso.toScreen(site.c + site.w - 0.12, site.r + site.h / 2, MT.CONFIG.map.rows);
+      const contact = LW.Iso.toScreen(site.c + site.w - 0.12, site.r + site.h / 2, LW.CONFIG.map.rows);
       const side = canvas.calls.find(call => call.name === 'fill' && call.color === '#7d8b9e').path;
-      const faceX = (side[0][0] + side[3][0]) / 2 + 0.05 * MT.Iso.TILE_W / 2;
+      const faceX = (side[0][0] + side[3][0]) / 2 + 0.05 * LW.Iso.TILE_W / 2;
       assert.ok(Math.abs(faceX - contact.x) < 1e-8, 'mallet striking face reaches the building wall');
     }
-    MT.Sim.cancel(state, site.id);
+    LW.Sim.cancel(state, site.id);
     draw();
     assert.equal(head(), undefined);
     renderer.reset();

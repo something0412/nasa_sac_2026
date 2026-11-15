@@ -7,8 +7,8 @@ const path = require('node:path');
 globalThis.window = globalThis;
 require(path.join(__dirname, '../js/config.js'));
 require(path.join(__dirname, '../js/iso.js'));
-const Iso = globalThis.MT.Iso;
-const { cols, rows } = globalThis.MT.CONFIG.map;
+const Iso = globalThis.LW.Iso;
+const { cols, rows } = globalThis.LW.CONFIG.map;
 
 test('every tile goes to the screen and back to the same tile', () => {
   for (let c = 0; c < cols; c++) {

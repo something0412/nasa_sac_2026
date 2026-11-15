@@ -3,19 +3,43 @@
 // whichever view is showing. Press V (or the 🧊 button) to switch. The player's choice is remembered.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const DEFAULT_VIEW = 'top'; // change to 'iso' to make the 2.5D view the default for new players
-  const STORE_KEY = 'mt.view';
+  const STORE_KEY = 'lunar-world.view';
+  // Settings used to be stored as 'mt.view' (old name of the game); move them over once.
+  try { if (localStorage.getItem(STORE_KEY) === null && localStorage.getItem('mt.view') !== null) { localStorage.setItem(STORE_KEY, localStorage.getItem('mt.view')); localStorage.removeItem('mt.view'); } } catch (e) { /* storage blocked: fine */ }
 
   function ViewSwitch(canvas, forecastCanvas) {
-    const views = { top: MT.Renderer(canvas, forecastCanvas), iso: MT.IsoRenderer(canvas) };
+    // One shared set of astronaut positions for both views, moved every frame (whichever view is showing).
+    const motion = LW.CrewMotion();
+    const views = { top: LW.Renderer(canvas, forecastCanvas, motion), iso: LW.IsoRenderer(canvas, motion) };
     let name = DEFAULT_VIEW;
     try { const saved = root.localStorage.getItem(STORE_KEY); if (views[saved]) name = saved; } catch (e) { /* storage blocked: use default */ }
     let lastState = null;
     const listeners = [];
     const cur = () => views[name];
     const both = (fn) => (...args) => { views.top[fn](...args); views.iso[fn](...args); };
+
+    // Paint the hidden view's ground picture once, when the browser is not busy, so the first switch is instant.
+    let prepared = false;
+    function prepareOther() {
+      if (prepared || !lastState) return;
+      prepared = true;
+      // A few milliseconds per slice, so the game never freezes (the 2.5D terraces take ~0.4 s in total).
+      const later = (fn) => (root.requestIdleCallback ? root.requestIdleCallback(fn, { timeout: 1000 }) : setTimeout(fn, 50));
+      const run = (deadline) => {
+        const budget = deadline && deadline.timeRemaining ? Math.max(4, Math.min(12, deadline.timeRemaining())) : 8;
+        let done = true;
+        for (const k in views) {
+          if (k === name) continue; // the view on screen already has its ground
+          const v = views[k];
+          done = (v.prepareStep ? v.prepareStep(lastState, budget) : (v.prepare(lastState), true)) && done;
+        }
+        if (!done) later(run);
+      };
+      later(run);
+    }
 
     function set(next) {
       if (!views[next] || next === name) return;
@@ -26,7 +50,7 @@
     }
 
     return {
-      draw: (state, dt, ui) => { lastState = state; cur().draw(state, dt, ui); },
+      draw: (state, dt, ui) => { lastState = state; motion.update(state, dt, ui && ui.paused); cur().draw(state, dt, ui); prepareOther(); },
       drawForecast: (state) => views.top.drawForecast(state), // the sunlight strip is the same in both views
       tileAt: (e) => cur().tileAt(e),
       toCanvas: (e) => cur().toCanvas(e),
@@ -40,15 +64,16 @@
       zoomAt: (e, factor) => { if (cur().zoomAt) cur().zoomAt(e, factor); },
       canZoom: () => !!cur().zoomAt,
       debug: () => ({ view: name, ...cur().debug() }),
-      reset: both('reset'),
+      reset: (...a) => { motion.reset(); both('reset')(...a); },
       resize: both('resize'),
       setSafeArea: both('setSafeArea'),
       view: () => name,
+      crewPos: (id) => motion.get(id), // where an astronaut is on the map (grid squares), for debugging
       setView: set,
       toggleView: () => set(name === 'top' ? 'iso' : 'top'),
       onViewChange: (fn) => { listeners.push(fn); fn(name); },
     };
   }
 
-  MT.ViewSwitch = ViewSwitch;
+  LW.ViewSwitch = ViewSwitch;
 })(window);

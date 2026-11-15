@@ -7,14 +7,17 @@
 //   world (x, y)  = pixels on the big isometric picture (see js/iso.js). The camera shows part of it.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const POOL_SIZE = 420;
   const SUIT_LINE = '#1b2230', VISOR = '#1ea5e9'; // astronaut outline and helmet visor (same as render.js)
   const METERS_PER_TILE = 10; // for the "base is 120 m away" tag
 
-  function IsoRenderer(canvas) {
-    const C = MT.CONFIG, Iso = MT.Iso;
+  // motion: shared astronaut positions (js/crew_motion.js), see render.js.
+  function IsoRenderer(canvas, motion) {
+    const ownMotion = !motion || typeof motion.update !== 'function';
+    if (ownMotion) motion = LW.CrewMotion();
+    const C = LW.CONFIG, Iso = LW.Iso;
     const COLS = C.map.cols, ROWS = C.map.rows;
     const HW = Iso.TILE_W / 2, HH = Iso.TILE_H / 2;
     // Terraces: hills step up and big craters step down (C.heightAt), STEP pixels per level. The world
@@ -40,7 +43,7 @@
     for (let i = 0; i < POOL_SIZE; i++) pool.push({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, kind: 0, color: '' });
     let time = 0, dashOffset = 0, frac = 0;
     let lift = 0; // pixels the building being drawn is raised by its terrace (see drawModuleOnGround)
-    let workTime = 0;
+    let needCenter = true; // look at the base on the first frame of a game
     const cam = { x: 0, y: 0, tx: 0, ty: 0, flying: false };
     let tagRect = null;
 
@@ -56,7 +59,14 @@
       for (let dc = 0; dc < w; dc++) for (let dr = 0; dr < h; dr++) z = Math.max(z, liftAt(c + dc, r + dr));
       return z;
     }
-    const liftOf = (m) => liftOfRect(m.c, m.r, m.w, m.h);
+    // Buildings never move and the terrain never changes, so each building's lift is worked out once and
+    // remembered (here in the view, not in the game state, so saves are not affected).
+    const liftCache = new WeakMap();
+    const liftOf = (m) => {
+      let z = liftCache.get(m);
+      if (z === undefined) { z = liftOfRect(m.c, m.r, m.w, m.h); liftCache.set(m, z); }
+      return z;
+    };
     const up = (p, z) => ({ x: p.x, y: p.y - z });
     // A direction in the grid (like "towards the Sun") → the same direction on screen.
     const gridDir = (dc, dr) => ({ x: (dc - dr) * HW, y: (dc + dr) * HH });
@@ -148,24 +158,60 @@
     // ---------- static ground, drawn once ----------
     const ZONE_IDS = { ridge: 0, plain: 1, ice: 2 }, ZONE_NAMES = ['ridge', 'plain', 'ice'];
     const zoneAt = (c, r) => ZONE_NAMES[zoneGrid[r * COLS + c]];
+    // The ground picture is painted step by step: groundSteps pauses (yield) after each small piece of work,
+    // so prepareStep can paint it a few milliseconds at a time in idle time without freezing the game.
+    // The finished picture is exactly the same as painting it in one go (buildGround).
+    let painting = null; // a ground painting in progress (see prepareStep)
     function buildGround(state) {
+      if (!painting) painting = groundSteps(state);
+      while (!painting.next().done) { /* finish the rest now */ }
+      painting = null;
+    }
+    /** Paint the ground for at most budgetMs. Returns true when the picture is finished. */
+    function prepareStep(state, budgetMs) {
+      if (ground) return true;
+      if (!state) return false;
+      if (!painting) painting = groundSteps(state);
+      const end = performance.now() + budgetMs;
+      do { if (painting.next().done) { painting = null; return true; } } while (performance.now() < end);
+      return false;
+    }
+    function* groundSteps(state) {
       zoneGrid = new Uint8Array(COLS * ROWS);
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) zoneGrid[r * COLS + c] = ZONE_IDS[MT.Sim.zoneOf(state, c, r)];
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) zoneGrid[r * COLS + c] = ZONE_IDS[LW.Sim.zoneOf(state, c, r)];
+      yield;
 
       // 1) A flat "texture" of the Moon: zone colours, dust, small craters and ice sparkles, as if it were flat.
       const tex = document.createElement('canvas');
       tex.width = W; tex.height = H;
       const g = tex.getContext('2d');
+      yield; // (making a picture this big takes a moment by itself)
       let seed = 1234;
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
       const diamond = (path, c, r) => {
         const a = P(c, r), b = P(c + 1, r), d = P(c + 1, r + 1), e = P(c, r + 1);
         path.moveTo(a.x, a.y); path.lineTo(b.x, b.y); path.lineTo(d.x, d.y); path.lineTo(e.x, e.y); path.closePath();
       };
-      const paths = { ridge: new Path2D(), plain: new Path2D(), ice: new Path2D() };
+      // The whole map is one big diamond (its outer edge); only the ice squares need their own outline
+      // (it keeps the ice sparkles on the ice). Outlining all 4480 squares one by one was slow.
       const all = new Path2D();
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) { diamond(paths[zoneAt(c, r)], c, r); diamond(all, c, r); }
-      for (const z of ['plain', 'ridge', 'ice']) { g.fillStyle = C.zones[z].color; g.fill(paths[z]); g.strokeStyle = C.zones[z].color; g.lineWidth = 1; g.stroke(paths[z]); }
+      { const a = P(0, 0), b = P(COLS, 0), d = P(COLS, ROWS), e = P(0, ROWS); all.moveTo(a.x, a.y); all.lineTo(b.x, b.y); all.lineTo(d.x, d.y); all.lineTo(e.x, e.y); all.closePath(); }
+      const paths = { ice: new Path2D() };
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (zoneAt(c, r) === 'ice') diamond(paths.ice, c, r);
+      yield;
+      // Plain is most of the Moon: one quick rectangle (only the squares are used later, so the corners don't matter).
+      g.fillStyle = C.zones.plain.color; g.fillRect(0, 0, W, H);
+      yield;
+      // Hills and ice craters on top, a band of 7 rows at a time (one big fill would freeze the game for a moment).
+      for (const z of ['ridge', 'ice']) {
+        for (let r0 = 0; r0 < ROWS; r0 += 7) {
+          const band = new Path2D();
+          let any = false;
+          for (let r = r0; r < Math.min(ROWS, r0 + 7); r++) for (let c = 0; c < COLS; c++) if (zoneAt(c, r) === z) { diamond(band, c, r); any = true; }
+          if (any) { g.fillStyle = C.zones[z].color; g.fill(band); g.strokeStyle = C.zones[z].color; g.lineWidth = 1; g.stroke(band); }
+          yield;
+        }
+      }
 
       // Dust speckles and craters, only on the Moon (not in the empty corners of the picture).
       g.save(); g.clip(all);
@@ -174,13 +220,19 @@
         const p = P(rand() * COLS, rand() * ROWS), s = rand() * 2 + 0.5;
         g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
         g.fillRect(p.x, p.y, s, s);
+        if (i % 3000 === 2999) yield;
       }
+      yield;
       const base = document.createElement('canvas'); // the ground before craters (see drawCrater in render.js)
       base.width = W; base.height = H; base.getContext('2d').drawImage(tex, 0, 0);
       const craters = [];
       for (let i = 0; i < 23 * area; i++) { const p = P(rand() * COLS, rand() * ROWS); craters.push({ x: p.x, y: p.y, r: (4 + rand() ** 2 * 30) * 1.25 }); }
       craters.sort((a, b) => b.r - a.r); // big (old) craters first, so small ones land on top of them
-      for (const k of craters) MT.drawCrater(g, k.x, k.y, k.r, 0.5, base); // same crater as render.js, squashed flat
+      for (let i = 0; i < craters.length; i++) { // same crater as render.js, squashed flat
+        const k = craters[i];
+        LW.drawCrater(g, k.x, k.y, k.r, 0.5, base);
+        if (i % 20 === 19) yield;
+      }
       base.width = 0; // free the copy's memory now
       g.restore();
       g.save(); g.clip(paths.ice);
@@ -209,6 +261,7 @@
       const wallL = {}, wallR = {}; // left walls face away from the light more, so they are darker
       for (const z of ZONE_NAMES) { wallL[z] = darken(C.zones[z].color, 0.55); wallR[z] = darken(C.zones[z].color, 0.75); }
       for (let s = 0; s <= COLS + ROWS - 2; s++) {
+        yield; // one diagonal row of squares at a time
         for (let c = Math.max(0, s - ROWS + 1); c <= Math.min(COLS - 1, s); c++) {
           const r = s - c, z = hgt[r * COLS + c] * STEP, zone = zoneAt(c, r);
           const t = P(c, r), L = P(c, r + 1), B = P(c + 1, r + 1), R = P(c + 1, r);
@@ -259,10 +312,10 @@
 
     // Direction the sunlight comes FROM, in grid squares (unit length). Smooth between game hours.
     const sunGrid = (state) => {
-      const a = (MT.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
+      const a = (LW.Sim.sunAz(state, state.hour + frac) * Math.PI) / 180;
       return { c: Math.cos(a), r: Math.sin(a) };
     };
-    const lightAt = (state, m) => MT.Sim.zoneLight(state, MT.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
+    const lightAt = (state, m) => LW.Sim.zoneLight(state, LW.Sim.zoneOf(state, m.c, m.r), state.hour + frac);
 
     function hull(pts) {
       pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -318,7 +371,7 @@
             ctx.fillRect(a.x - 3, a.y - 12, 6, 6); ctx.fillRect(b.x - 3, b.y - 12, 6, 6);
           }
           ctx.fillStyle = '#5b6576'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
-          ctx.fillText(MT.Sim.habs(state).length > 1 && m.built ? MT.Sim.habName(state, m) : 'HAB', ctr.x, ctr.y - ht + 2);
+          ctx.fillText(LW.Sim.habs(state).length > 1 && m.built ? LW.Sim.habName(state, m) : 'HAB', ctr.x, ctr.y - ht + 2);
           break;
         }
         case 'solar': {
@@ -343,7 +396,7 @@
           break;
         }
         case 'battery': {
-          const cap = MT.Sim.batteryCap(state) || 1;
+          const cap = LW.Sim.batteryCap(state) || 1;
           const fr = Math.max(0, Math.min(1, state.res.battery / cap));
           const f = footprint(m.c, m.r, 1, 1, 0.24);
           prism(f, ht, '#3a414d', '#22272f', '#2a2f38', '#8a93a3');
@@ -424,12 +477,12 @@
           ctx.fillStyle = '#1b2230'; ctx.fillRect(-2.5, -9, 5, 9);
           ctx.fillStyle = '#ffd36b'; ctx.fillRect(-1.5, -15, 3, 8);
           ctx.restore();
-          if (m.built && blink && !MT.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(f[1].x - 4, f[1].y - 16, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
+          if (m.built && blink && !LW.Sim.towerReadyIn(state, m)) { ctx.fillStyle = '#7fb4ff'; ctx.beginPath(); ctx.arc(f[1].x - 4, f[1].y - 16, 2.2, 0, Math.PI * 2); ctx.fill(); } // ready to use
           break;
         }
         case 'pad': {
           // Landing Pad: a flat platform with an "H" and corner lights (blinking = ready for a spaceship).
-          const ready = m.built && MT.Sim.landingSpots(state).some((sp) => sp.pad === m);
+          const ready = m.built && LW.Sim.landingSpots(state).some((sp) => sp.pad === m);
           const f = footprint(m.c, m.r, m.w, m.h, 0.08);
           prism(f, ht, '#5d5f66', '#45474d', '#505259', '#9aa2af');
           ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y - ht, HW * 1.15, HH * 1.15, 0, 0, Math.PI * 2);
@@ -475,7 +528,7 @@
       } else if (!m.on) {
         poly(f); ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
         ctx.fillStyle = '#ccc'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('OFF', ctr.x, ctr.y - ht - 4);
-      } else if (MT.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
+      } else if (LW.Sim.needOf(state, m) > 0 && m.type !== 'solar' && !m.powered) {
         poly(f); ctx.fillStyle = 'rgba(40,0,0,0.45)'; ctx.fill();
         ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke();
         if (blink) icon('⚡', 16);
@@ -499,7 +552,7 @@
       }
       // Research boost: "1.5x" / "2x" badge above machines close enough to a Research Bay.
       if (m.built && C.research.targets.includes(m.type)) {
-        const b = MT.Sim.boostOf(state, m);
+        const b = LW.Sim.boostOf(state, m);
         if (b > 1) {
           const x = ctr.x - HW * 0.5, y = ctr.y - ht - 10;
           ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x - 10, y - 8, 20, 11, 3); ctx.fill();
@@ -511,7 +564,7 @@
 
     // Swing in a vertical plane along the grid's c axis, then project to the same 2:1 view as buildings.
     function drawBuildingHammer(a, m) {
-      const cycle = (workTime * 1.4 + a.id * 0.17) % 1;
+      const cycle = (motion.workTime() * 1.4 + a.id * 0.17) % 1;
       const strikeAngle = 1;
       const lift = (1 - Math.sin(cycle * Math.PI)) * strikeAngle;
       const contactC = m.c + m.w - 0.12;
@@ -571,7 +624,7 @@
         const k = 1 + Math.sin(time * 5) * 0.15;
         ctx.beginPath(); ctx.ellipse(p.x, p.y, 11 * k, 5.5 * k, 0, 0, Math.PI * 2); ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2; ctx.stroke();
       }
-      const body = exposed && danger && blink ? '#ff5d5d' : MT.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
+      const body = exposed && danger && blink ? '#ff5d5d' : LW.Sim.isSlow(A) ? '#ffc04d' : '#ffffff';
       ctx.fillStyle = body; ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.roundRect(p.x - 3.5, y - 12, 7, 11, 3.5); ctx.fill(); ctx.stroke(); // suit
       const hy = y - 15;
@@ -664,8 +717,8 @@
 
     // ---------- main draw ----------
     function draw(state, dt, ui) {
-      if (!ui.paused && state.status === 'running') workTime += dt;
-      if (!ground) { buildGround(state); centerOnBase(state, false); }
+      if (!ground) buildGround(state);
+      if (needCenter) { centerOnBase(state, false); needCenter = false; }
       frac = ui.frac || 0;
       time += dt;
       dashOffset -= dt * 28;
@@ -690,8 +743,8 @@
       // Terrain shadow: each zone gets darker as the Sun slides behind the hills. The masks (made in
       // buildGround) hold exactly where each zone shows, terrace walls included, so nearer hills stay right.
       const shadeOf = {
-        ridge: 0.75 * (1 - MT.Sim.zoneLight(state, 'ridge', state.hour + frac)),
-        plain: 0.75 * (1 - MT.Sim.zoneLight(state, 'plain', state.hour + frac)),
+        ridge: 0.75 * (1 - LW.Sim.zoneLight(state, 'ridge', state.hour + frac)),
+        plain: 0.75 * (1 - LW.Sim.zoneLight(state, 'plain', state.hour + frac)),
         ice: 0.35,
       };
       if (gw > 0 && gh > 0) {
@@ -704,9 +757,18 @@
       }
 
       // Object shadows point AWAY from the Sun, long and soft because the Sun is always low at the pole.
+      // Only draw what the camera can see (+ a margin for tall buildings, long shadows and labels), so a big base stays fast.
+      // A building on a terrace is drawn raised (or sunk) by its lift, so that is included.
+      const MARGIN = 140, vx0 = cam.x - MARGIN, vy0 = cam.y - MARGIN, vx1 = cam.x + VWz + MARGIN, vy1 = cam.y + VHz + MARGIN;
+      const onScreen = (m) => {
+        const z = liftOf(m), a = P(m.c, m.r), b = P(m.c + m.w, m.r), d = P(m.c + m.w, m.r + m.h), e = P(m.c, m.r + m.h);
+        return Math.max(a.x, b.x, d.x, e.x) >= vx0 && Math.min(a.x, b.x, d.x, e.x) <= vx1 && Math.max(a.y, b.y, d.y, e.y) - z >= vy0 && Math.min(a.y, b.y, d.y, e.y) - z <= vy1;
+      };
+      const lineOnScreen = (a, b) => Math.max(a.x, b.x) >= vx0 && Math.min(a.x, b.x) <= vx1 && Math.max(a.y, b.y) >= vy0 && Math.min(a.y, b.y) <= vy1;
+      const habMids = LW.Sim.habs(state).map((h) => up(mid(h), liftOf(h))); // worked out once per frame (not once per building)
       const sg = sunGrid(state);
       for (const m of state.modules) {
-        if (!m.built || m.type === 'pad') continue; // (flat pads cast no shadow)
+        if (!m.built || m.type === 'pad' || !onScreen(m)) continue; // (flat pads cast no shadow)
         const L = lightAt(state, m);
         if (L < 0.02) continue;
         const len = (m.type === 'hab' ? 1.1 : m.type === 'solar' || m.type === 'drill' || m.type === 'tower' ? 0.9 : 0.5) * (1 + (1 - L) * 1.5);
@@ -730,12 +792,13 @@
         else if (m.type === 'battery') {
           const charging = state.power.supply > state.power.use;
           color = state.res.battery > 0.01 || charging ? '#7de0a0' : '#4a4f5a'; flow = charging ? 1 : state.res.battery > 0.01 ? -1 : 0;
-        } else if (m.type === 'shelter' || !MT.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
+        } else if (m.type === 'shelter' || !LW.Sim.needOf(state, m)) { color = m.type === 'shelter' ? '#6b5b45' : '#5a6170'; } // walkways, no power cable
         else { color = !m.on ? '#4a4f5a' : m.powered ? '#ffd36b' : '#ff5d5d'; flow = m.on && m.powered ? -1 : 0; }
         ctx.strokeStyle = color;
-        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !MT.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
+        ctx.setLineDash(flow ? [6, 6] : (m.type === 'shelter' || !LW.Sim.needOf(state, m)) ? [2, 4] : [3, 5]);
         ctx.lineDashOffset = flow * dashOffset;
-        const to = m.type === 'hab' ? hc : MT.Sim.habs(state).map((h) => up(mid(h), liftOf(h))).reduce((b, p) => (Math.hypot(p.x - c.x, p.y - c.y) < Math.hypot(b.x - c.x, b.y - c.y) ? p : b), hc); // nearest HAB
+        const to = m.type === 'hab' ? hc : habMids.reduce((b, p) => (Math.hypot(p.x - c.x, p.y - c.y) < Math.hypot(b.x - c.x, b.y - c.y) ? p : b), hc); // nearest HAB
+        if (!lineOnScreen(c, to)) continue; // a cable can cross the screen even if both ends are off it
         ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(to.x, to.y); ctx.stroke();
       }
       ctx.setLineDash([]); ctx.lineDashOffset = 0;
@@ -743,10 +806,10 @@
       // Research Bay reach (dashed ring on the ground): while placing one, hovering one, or with the Scientist
       // picked. A circle of R squares on the grid is an ellipse √2·R·HW wide and √2·R·HH tall on screen.
       const picked = ui.selectedCrew ? state.crew.find((a) => a.id === ui.selectedCrew && !a.medbay) : null;
-      const hoverM = ui.hover && !ui.buildType && Iso.inMap(ui.hover.c, ui.hover.r, COLS, ROWS) ? MT.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
+      const hoverM = ui.hover && !ui.buildType && Iso.inMap(ui.hover.c, ui.hover.r, COLS, ROWS) ? LW.Sim.moduleAt(state, ui.hover.c, ui.hover.r) : null;
       const rings = [];
       if (ui.buildType === 'lab' && ui.hover) rings.push(up(P(ui.hover.c + 0.5, ui.hover.r + 0.5), liftAt(ui.hover.c, ui.hover.r)));
-      for (const l of MT.Sim.built(state, 'lab')) {
+      for (const l of LW.Sim.built(state, 'lab')) {
         if ((picked && picked.role === 'scientist') || hoverM === l || (hoverM && C.research.targets.includes(hoverM.type))) rings.push({ ...up(mid(l), liftOf(l)), dead: l.damaged });
       }
       // Placing a Landing Pad: gold rings show how close to a HAB it must be.
@@ -774,68 +837,44 @@
         ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       // The picked Engineer's job sites get a dashed outline in their role colour.
-      const jobs = MT.Sim.jobList(state);
+      const jobs = LW.Sim.jobList(state);
       if (picked) {
         ctx.strokeStyle = C.astro.roleInfo[picked.role].color; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
         for (const j of jobs) if (j.assignee === picked.id) { const m = j.m || habM; poly(footprint(m.c, m.r, m.w, m.h, -0.06), liftOf(m)); ctx.stroke(); }
         ctx.setLineDash([]);
       }
 
-      // Astronauts: work out where each one is (in grid squares), walking toward where the AMS says they are.
-      const shelters = MT.Sim.built(state, 'shelter');
+      // Astronauts: where they stand comes from the shared crew motion (js/crew_motion.js, grid squares),
+      // so they keep walking from the same spot when the player switches views.
+      if (ownMotion) motion.update(state, dt, ui.paused);
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
-      const gmid = (m) => ({ c: m.c + m.w / 2, r: m.r + m.h / 2 });
       const people = [];
       // The rover (TEMPORARY model): drawn in depth order with everything else.
       const rp = roverAt(state);
       if (rp) people.push({ depth: rp.c + rp.r, draw: () => drawRover(rp) });
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
-        const i = A.id - 1; // keyed by id, so someone leaving never moves the others' spots
-        const a = crew[A.id] || (crew[A.id] = { c: 0, r: 0, init: false });
-        if (A.trip) { a.init = false; return; } // inside the rover (they appear at the new HAB when it arrives)
-        const hcg = gmid(MT.Sim.homeOf(state, A)); // their own HAB
-        const job = jobs.find((j) => j.key === A.job);
-        let tc = hcg.c + Math.cos(i * 1.57 + 0.8) * 0.22, tr = hcg.r + Math.sin(i * 1.57 + 0.8) * 0.22;
-        let visible = false;
-        const dist = (s) => Math.hypot(gmid(s).c - hcg.c, gmid(s).r - hcg.r);
-        const shelter = shelters.reduce((b, s) => (!b || dist(s) < dist(b) ? s : b), null); // the shelter closest to their HAB
-        if (A.where === 'shelter' && shelter) { const s = gmid(shelter); tc = s.c - 0.2 + (i % 4) * 0.15; tr = s.r + 0.4; visible = true; }
-        else if (A.where === 'gym') {
-          const g = state.modules.find((m) => m.id === A.gymId);
-          if (g) { const gc = gmid(g); tc = gc.c + 0.3; tr = gc.r + 0.3; visible = true; }
-        } else if (A.task && A.where === A.task.kind) { // Research Bay, greenhouse or Astronomy Tower
-          const tm = state.modules.find((m) => m.id === A.task.id);
-          if (tm) { const g = gmid(tm); tc = g.c + 0.38 + Math.sin(time * 1.5 + i) * 0.04; tr = g.r + 0.38; visible = true; }
-        } else if (A.where === 'outside') {
-          const bc = job && job.m ? gmid(job.m) : hcg; // moon-dirt shield: walk around that HAB
-          const jc = job && job.m && job.kind !== 'berm' ? gmid(job.m) : { c: bc.c + Math.cos(time * 0.4 + i * 3) * 1.05, r: bc.r + Math.sin(time * 0.4 + i * 3) * 1.05 };
-          tc = jc.c + 0.38 + Math.sin(time * 3 + i) * 0.07; tr = jc.r + 0.38; visible = true;
-          if (job?.kind === 'module') { tc = job.m.c + job.m.w + 0.2; tr = job.m.r + job.m.h / 2; }
-        }
-        if (!a.init) { a.c = tc; a.r = tr; a.z = null; a.init = true; } // (z: new terrace, e.g. after a rover trip)
-        const dc = tc - a.c, dr = tr - a.r, d = Math.hypot(dc, dr), sp = (140 / 40) * dt; // same walking speed as the top-down map
-        if (d > sp) {
-          a.c += (dc / d) * sp; a.r += (dr / d) * sp;
-          if (Math.abs(dc - dr) > d * 0.1) a.face = dc - dr > 0 ? 1 : -1; // on screen, x grows with c - r; straight up/down keeps the last way
-        } else { a.c = tc; a.r = tr; }
+        const p = motion.get(A.id);
+        if (!p || A.trip) { if (crew[A.id]) crew[A.id].z = null; return; } // inside the rover: new terrace when they get out
+        const a = crew[A.id] || (crew[A.id] = { c: 0, r: 0, z: null });
+        a.c = p.c; a.r = p.r; a.face = p.face; a.walk = p.walk; // face = which way they look, walk = hop strength
         const zT = liftAt(a.c, a.r); // terrace under their feet: step up/down to it quickly instead of popping
         a.z = a.z == null ? zT : a.z + (zT - a.z) * Math.min(1, dt * 12);
-        a.walk = Math.max(0, Math.min(1, (a.walk || 0) + (d > sp ? dt : -dt) * 6)); // 0..1: eases the hopping in and out
-        const sel = picked === A;
-        a.id = A.id;
-        a.building = state.status === 'running' && job?.active && job.kind === 'module' && Math.hypot(tc - a.c, tr - a.r) < 0.075 ? job.m : null;
+        // Hammering a building site: face the building (Gerardo's mallet is drawn in drawAstronaut).
+        a.building = p.building ? state.modules.find((m) => m.id === p.building) || null : null;
         if (a.building) {
           const target = mid(a.building), position = P(a.c, a.r);
           a.face = target.x < position.x ? -1 : 1;
         }
-        a.shown = !A.medbay && (visible || d * PX_PER_TILE >= 1 || sel); // the picked astronaut is always shown, even inside
+        const sel = picked === A;
+        a.id = A.id;
+        a.shown = !A.medbay && (p.visible || p.dist * PX_PER_TILE >= 1 || sel); // the picked astronaut is always shown, even inside
         if (!a.shown) return; // inside the habitat (or medbay): hidden
-        people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, MT.Sim.isExposed(A), danger, blink, sel) });
+        people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, LW.Sim.isExposed(A), danger, blink, sel) });
       });
 
       // Draw buildings and people from the back of the map to the front, so nearer things cover farther ones.
-      const things = state.modules.map((m) => ({ depth: m.c + m.w / 2 + m.r + m.h / 2, draw: () => drawModuleOnGround(state, m, blink) }));
+      const things = state.modules.filter(onScreen).map((m) => ({ depth: m.c + m.w / 2 + m.r + m.h / 2, draw: () => drawModuleOnGround(state, m, blink) }));
       for (const t of things.concat(people).sort((a, b) => a.depth - b.depth)) t.draw();
 
       // radiation storm particles stream in from the Sun's direction
@@ -893,14 +932,14 @@
         const { c, r } = ui.hover;
         if (ui.buildType) {
           const d = C.modules[ui.buildType];
-          const ok = MT.Sim.canPlace(state, ui.buildType, c, r).ok;
+          const ok = LW.Sim.canPlace(state, ui.buildType, c, r).ok;
           const f = footprint(c, r, d.w, d.h, 0), z = liftOfRect(c, r, d.w, d.h);
           poly(f, z); ctx.fillStyle = ok ? 'rgba(95,224,138,0.25)' : 'rgba(255,93,93,0.25)'; ctx.fill();
           ctx.strokeStyle = ok ? '#5fe08a' : '#ff5d5d'; ctx.lineWidth = 2; ctx.stroke();
           const p = up(P(c + d.w / 2, r + d.h / 2), z);
           ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(d.icon, p.x, p.y + 7);
         } else {
-          const m = MT.Sim.moduleAt(state, c, r);
+          const m = LW.Sim.moduleAt(state, c, r);
           ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
           poly(m ? footprint(m.c, m.r, m.w, m.h, 0) : footprint(c, r, 1, 1, 0), m ? liftOf(m) : liftAt(c, r)); ctx.stroke();
         }
@@ -913,7 +952,12 @@
       drawBaseTag(hc, habM);
     }
 
-    function reset() { ground = null; tagRect = null; zoom = 1; workTime = 0; for (const p of pool) p.alive = false; }
+    // New game. The ground picture is kept: the terrain is the same in every game (it comes from the config),
+    // and painting it again takes long enough to freeze the game. Call rebuildGround() if the map ever changes.
+    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; if (ownMotion) motion.reset(); for (const p of pool) p.alive = false; }
+    function rebuildGround() { ground = null; painting = null; }
+    /** Paint the ground picture now (if not done yet), so showing this view later does not freeze the game. */
+    function prepare(state) { if (!ground && state) buildGround(state); }
     /** The astronaut drawn under the mouse (id), or null. Checks the body and the number tag above it. */
     function crewAt(evt) {
       const p = toCanvas(evt), wx = cam.x + p.x / zoom, wy = cam.y + p.y / zoom; // mouse → world pixels
@@ -927,7 +971,7 @@
     }
 
     return {
-      draw, tileAt, toCanvas, hitTag, crewAt, reset, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
+      draw, tileAt, toCanvas, hitTag, crewAt, reset, rebuildGround, prepare, prepareStep, centerOnBase, centerOnTile, screenOf, resize, setSafeArea, zoomAt,
 
       panStart: () => ({ x: cam.x, y: cam.y }),
       debug: () => ({ cam: { ...cam }, zoom, tag: tagRect, view: [VW, VH], world: [W, H] }),
@@ -935,5 +979,5 @@
     };
   }
 
-  MT.IsoRenderer = IsoRenderer;
+  LW.IsoRenderer = IsoRenderer;
 })(window);

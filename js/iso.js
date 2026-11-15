@@ -12,7 +12,7 @@
 // Positions are in "iso world pixels": (0, 0) is the top-left corner of the whole isometric map.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
   const TILE_W = 64;
   const TILE_H = 32;
@@ -51,5 +51,5 @@
     return { w: (cols + rows) * HALF_W, h: (cols + rows) * HALF_H };
   }
 
-  MT.Iso = { TILE_W, TILE_H, toScreen, tileCenter, toGrid, inMap, worldSize };
+  LW.Iso = { TILE_W, TILE_H, toScreen, tileCenter, toGrid, inMap, worldSize };
 })(typeof window !== 'undefined' ? window : globalThis);

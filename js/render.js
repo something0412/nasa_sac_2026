@@ -45,8 +45,8 @@
   // motion: shared astronaut positions (js/crew_motion.js). view.js passes one shared object to both views;
   // without it this view keeps its own (used by tests and if render.js is used on its own).
   function Renderer(canvas, forecastCanvas, motion) {
-    const ownMotion = !motion;
-    if (!motion) motion = LW.CrewMotion();
+    const ownMotion = !motion || typeof motion.update !== 'function';
+    if (ownMotion) motion = LW.CrewMotion();
     const C = LW.CONFIG, T = C.map.tile;
     const W = C.map.cols * T, H = C.map.rows * T; // world size
     let VW = C.map.viewCols * T, VH = C.map.viewRows * T, DPR = 1; // what the camera shows (CSS pixels)
@@ -381,6 +381,23 @@
       }
     }
 
+    // Gerardo's construction mallet, swung by an Engineer standing at a building site (top-down).
+    function drawBuildingHammer(a, m) {
+      const x = a.x - 3, y = a.y - 8; // right-hand side of the left-facing astronaut
+      const targetX = (m.c + m.w) * T - 1;
+      const reach = x - targetX;
+      const cycle = (motion.workTime() * 1.4 + a.id * 0.17) % 1;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.PI + Math.sin(cycle * Math.PI));
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(reach * 0.4, 0); ctx.stroke();
+      ctx.fillStyle = '#b88750'; ctx.fillRect(reach * 0.3, -1.5, reach * 0.7, 3);
+      ctx.fillStyle = '#c6d0dd'; ctx.fillRect(reach - 3, -5, 6, 10);
+      ctx.strokeStyle = '#4a5566'; ctx.lineWidth = 0.6; ctx.strokeRect(reach - 3, -5, 6, 10);
+      ctx.restore();
+    }
+
     // ---------- meteor shower animation ----------
     // Meteors streak in from one direction (a shower's "radiant"), flash where they land and kick up dust.
     function spawnMeteors(dt) {
@@ -563,7 +580,7 @@
 
       // astronauts: where they stand comes from the shared crew motion (js/crew_motion.js, grid squares),
       // so they keep walking from the same spot when the player switches views.
-      if (ownMotion) motion.update(state, dt);
+      if (ownMotion) motion.update(state, dt, ui.paused);
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       for (const k in crew) crew[k].shown = false; // astronauts sent home to Earth are no longer in state.crew
       state.crew.forEach((A) => {
@@ -571,6 +588,14 @@
         if (!p || A.trip) return; // inside the rover (they appear at the new HAB when it arrives)
         const a = crew[A.id] || (crew[A.id] = { x: 0, y: 0, dir: -Math.PI / 2 });
         a.x = p.c * T; a.y = p.r * T; a.dir = p.dir; // grid squares -> world pixels; dir = way the visor faces
+        // Hammering a building site: face the building. The top-down mallet needs a bit more room than the
+        // shared spot (8 px from the wall), so slide out to 15 px, eased in as they stop walking (no jump).
+        const building = p.building ? state.modules.find((m) => m.id === p.building) : null;
+        if (building) {
+          a.x += (15 - 0.2 * T) * (1 - p.walk);
+          const target = center(building);
+          a.dir = Math.atan2(target.y - a.y, target.x - a.x);
+        }
         const sel = picked === A;
         a.id = A.id;
         a.shown = !A.medbay && (p.visible || p.dist * T >= 1 || sel); // the picked astronaut is always shown, even inside
@@ -590,6 +615,7 @@
         ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); // the helmet outline again (the visor path replaced it)
         ctx.strokeStyle = SUIT_LINE; ctx.lineWidth = 1; ctx.stroke();
         ctx.restore();
+        if (building) drawBuildingHammer(a, building);
         // number tag (border = role colour) so you can match the astronaut to the AMS list
         ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(a.x - 6, a.y - 17, 12, 10, 3); ctx.fill();
         ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
@@ -742,7 +768,7 @@
 
     // New game. The ground picture is kept: the terrain is the same in every game (it comes from the config),
     // and painting it again takes long enough to freeze the game. Call rebuildGround() if the map ever changes.
-    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; for (const p of pool) p.alive = false; }
+    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; if (ownMotion) motion.reset(); for (const p of pool) p.alive = false; }
     function rebuildGround() { ground = null; }
     /** Paint the ground picture now (if not done yet), so showing this view later does not freeze the game. */
     function prepare(state) { if (!ground && state) buildGround(state); }

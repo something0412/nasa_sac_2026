@@ -37,9 +37,11 @@ test('an astronaut walks smoothly from their HAB to a job (no jumping)', () => {
     if (p.dist === 0) break;
   }
   assert.ok(maxStep < 0.1, 'moves a little each frame, biggest step ' + maxStep);
-  const goal = { c: site.c + site.w / 2, r: site.r + site.h / 2 };
-  assert.ok(Math.hypot(last.c - goal.c, last.r - goal.r) < 0.7, 'arrives next to the job site');
+  // Builders stand just outside the building's right-hand wall, in the middle of that side (Gerardo's mallet spot).
+  const goal = { c: site.c + site.w + 0.2, r: site.r + site.h / 2 };
+  assert.ok(Math.hypot(last.c - goal.c, last.r - goal.r) < 0.01, 'arrives at the wall of the job site');
   assert.ok(last.visible, 'shown while working outside');
+  assert.strictEqual(last.building, site.id, 'marked as hammering on that building');
 });
 
 test('positions do not depend on which view is drawing: one shared object, one update per frame', () => {

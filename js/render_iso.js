@@ -15,8 +15,8 @@
 
   // motion: shared astronaut positions (js/crew_motion.js), see render.js.
   function IsoRenderer(canvas, motion) {
-    const ownMotion = !motion;
-    if (!motion) motion = LW.CrewMotion();
+    const ownMotion = !motion || typeof motion.update !== 'function';
+    if (ownMotion) motion = LW.CrewMotion();
     const C = LW.CONFIG, Iso = LW.Iso;
     const COLS = C.map.cols, ROWS = C.map.rows;
     const HW = Iso.TILE_W / 2, HH = Iso.TILE_H / 2;
@@ -449,6 +449,57 @@
       ctx.restore();
     }
 
+    // Swing in a vertical plane along the grid's c axis, then project to the same 2:1 view as buildings.
+    function drawBuildingHammer(a, m) {
+      const cycle = (motion.workTime() * 1.4 + a.id * 0.17) % 1;
+      const strikeAngle = 1;
+      const lift = (1 - Math.sin(cycle * Math.PI)) * strikeAngle;
+      const contactC = m.c + m.w - 0.12;
+      const handleLength = 5, halfLength = 0.12, halfDepth = 0.05, halfHeight = 1.5;
+      // The handle sits beneath the middle of the broad head and pivots from the astronaut's grip.
+      const gripC = contactC + halfLength * Math.cos(strikeAngle) + (handleLength / HW) * Math.sin(strikeAngle);
+      const gripZ = 6;
+      const headC = gripC - (handleLength / HW) * Math.sin(lift);
+      const headZ = gripZ + handleLength * Math.cos(lift);
+      const shoulder = P(a.c, a.r), grip = P(gripC, a.r), socket = P(headC + (halfHeight / HW) * Math.sin(lift), a.r);
+      shoulder.y -= 8; grip.y -= gripZ; socket.y -= headZ - halfHeight * Math.cos(lift);
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#8c96a5'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(shoulder.x, shoulder.y); ctx.lineTo(grip.x, grip.y); ctx.stroke();
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.strokeStyle = '#725234'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(grip.x, grip.y); ctx.lineTo(socket.x, socket.y); ctx.stroke();
+      ctx.strokeStyle = '#c59862'; ctx.lineWidth = 0.8; ctx.stroke();
+      // The long axis points into the wall. Rotate the solid head in grid space before projection.
+      const cos = Math.cos(lift), sin = Math.sin(lift);
+      const corners = [[-halfLength, -halfDepth], [halfLength, -halfDepth], [halfLength, halfDepth], [-halfLength, halfDepth]];
+      const layer = (height) => corners.map(([dc, dr]) => {
+        const point = P(headC + dc * cos - (height / HW) * sin, a.r + dr);
+        point.y -= headZ + dc * HW * sin + height * cos;
+        return point;
+      });
+      const base = layer(-halfHeight), lid = layer(halfHeight);
+      ctx.strokeStyle = '#4a5566'; ctx.lineWidth = 0.6; ctx.lineJoin = 'round';
+      poly([base[3], base[2], lid[2], lid[3]]);
+      ctx.fillStyle = '#7d8b9e'; ctx.fill(); ctx.stroke();
+      poly([base[2], base[1], lid[1], lid[2]]);
+      ctx.fillStyle = '#9aa9bb'; ctx.fill(); ctx.stroke();
+      // When raised past the camera, the underside becomes visible in place of the top.
+      poly(cos >= sin ? lid : base);
+      ctx.fillStyle = '#c6d0dd'; ctx.fill(); ctx.stroke();
+      if (cycle < 0.1) {
+        const hit = P(contactC, a.r);
+        hit.y -= gripZ + handleLength * Math.cos(strikeAngle) - halfLength * HW * Math.sin(strikeAngle);
+        ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(hit.x - 4, hit.y - 5); ctx.lineTo(hit.x - 8, hit.y - 7);
+        ctx.moveTo(hit.x - 4, hit.y + 2); ctx.lineTo(hit.x - 8, hit.y + 4);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // ---------- astronauts ----------
     function drawAstronaut(A, a, exposed, danger, blink, sel) {
       const p = P(a.c, a.r);
@@ -471,6 +522,7 @@
       ctx.fillStyle = VISOR; ctx.beginPath(); ctx.ellipse(p.x - 2.2 * s, hy, 3.5, 3, 0, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
       ctx.beginPath(); ctx.arc(p.x, hy, 5, 0, Math.PI * 2); ctx.stroke(); // helmet outline back on top of the visor
+      if (a.building) drawBuildingHammer(a, a.building);
       // number tag (border = role colour) so you can match the astronaut to the AMS list
       ctx.fillStyle = 'rgba(10,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(p.x - 6, p.y - 35, 12, 10, 3); ctx.fill();
       ctx.strokeStyle = C.astro.roleInfo[A.role].color; ctx.lineWidth = 1; ctx.stroke();
@@ -686,7 +738,7 @@
 
       // Astronauts: where they stand comes from the shared crew motion (js/crew_motion.js, grid squares),
       // so they keep walking from the same spot when the player switches views.
-      if (ownMotion) motion.update(state, dt);
+      if (ownMotion) motion.update(state, dt, ui.paused);
       const danger = state.stormRate > C.rad.stormOn || !!state.meteorOn;
       const people = [];
       // The rover (TEMPORARY model): drawn in depth order with everything else.
@@ -698,6 +750,12 @@
         if (!p || A.trip) return; // inside the rover (they appear at the new HAB when it arrives)
         const a = crew[A.id] || (crew[A.id] = { c: 0, r: 0 });
         a.c = p.c; a.r = p.r; a.face = p.face; a.walk = p.walk; // face = which way they look, walk = hop strength
+        // Hammering a building site: face the building (Gerardo's mallet is drawn in drawAstronaut).
+        a.building = p.building ? state.modules.find((m) => m.id === p.building) || null : null;
+        if (a.building) {
+          const target = mid(a.building), position = P(a.c, a.r);
+          a.face = target.x < position.x ? -1 : 1;
+        }
         const sel = picked === A;
         a.id = A.id;
         a.shown = !A.medbay && (p.visible || p.dist * PX_PER_TILE >= 1 || sel); // the picked astronaut is always shown, even inside
@@ -786,7 +844,7 @@
 
     // New game. The ground picture is kept: the terrain is the same in every game (it comes from the config),
     // and painting it again takes long enough to freeze the game. Call rebuildGround() if the map ever changes.
-    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; for (const p of pool) p.alive = false; }
+    function reset() { tagRect = null; zoom = 1; needCenter = true; crew = {}; if (ownMotion) motion.reset(); for (const p of pool) p.alive = false; }
     function rebuildGround() { ground = null; }
     /** Paint the ground picture now (if not done yet), so showing this view later does not freeze the game. */
     function prepare(state) { if (!ground && state) buildGround(state); }

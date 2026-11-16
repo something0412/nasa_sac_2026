@@ -123,8 +123,140 @@
   function menu() {
     setSpeed(0);
     if (!state) { state = LW.Sim.create({ scenario: 'training' }); refresh(); } // map shows behind the menu
-    ui.showStart((scn) => start(scn));
+    ui.showStart((scn) => start(scn), {
+      list: LW.Save.list(),
+      onLoad: (slot) => loadSlot(slot, menu),
+      onLoadList: () => openLoadList(menu),
+      onImport: () => importFile(),
+    });
   }
+
+  // ----- saving and loading (js/save.js) -----
+  // Saves stay on this device (IndexedDB). Autosave every 10 game days into two slots that take turns.
+  const canSave = () => state && state.status === 'running' && !busy;
+  function saveTo(slot) {
+    if (!canSave()) return Promise.reject(new Error(busy ? 'Wait until the spaceship has landed.' : 'There is no game running to save.'));
+    let env;
+    try { env = LW.Save.pack(state); } catch (e) { return Promise.reject(e); }
+    const st = state, hour = state.hour;
+    return LW.Save.put(slot, env).then(() => { lastSaved = { st, hour }; return env; });
+  }
+  // Something happened since the last save (so closing the tab would lose it).
+  let lastSaved = null;
+  const unsaved = () => canSave() && state.hour > 0 && !(lastSaved && lastSaved.st === state && lastSaved.hour === state.hour);
+
+  // The Save button shows what is happening on its own label: "Saving…", then "✅ Saved".
+  const saveBtn = document.getElementById('saveBtn');
+  const SAVE_LABEL = saveBtn.textContent;
+  let labelTimer = 0, autoFailed = false;
+  function saveLabel(text, ms) {
+    clearTimeout(labelTimer);
+    saveBtn.textContent = text;
+    if (ms) labelTimer = setTimeout(() => { saveBtn.textContent = SAVE_LABEL; }, ms);
+  }
+  function autosave() {
+    saveTo(LW.Save.autoSlot(state.hour)).then(() => { autoFailed = false; saveLabel('✅ Autosaved', 2000); }, (err) => {
+      if (autoFailed) return; // say it once, not every 10 days
+      autoFailed = true;
+      warn('Autosave did not work', `${err.message} Use ▾ → Save to a file to keep your game.`);
+    });
+  }
+  // The Save button and Ctrl+S: one click saves into "Your save".
+  function quickSave() {
+    if (!state || ui.isModalOpen()) return;
+    saveLabel('💾 Saving…');
+    saveTo('manual').then(() => saveLabel('✅ Saved', 2000), (err) => { saveLabel(SAVE_LABEL); warn("Can't save", err.message); });
+  }
+
+  // Closing the tab: the browser does not let a page show its own pop-up there, only its "Leave site?" box.
+  // So when there is unsaved progress we start saving right away, show "Saving your game…" on the page,
+  // and ask the browser for its box. While the player reads it, the save finishes (it takes a few ms).
+  const exitBox = document.getElementById('exitSaving');
+  let exitTimer = 0;
+  window.addEventListener('beforeunload', (e) => {
+    if (!unsaved()) return;
+    exitBox.textContent = '💾 Saving your game…';
+    exitBox.hidden = false;
+    saveTo('exit').then(() => { exitBox.textContent = '✅ Game saved. You can close the tab.'; }, () => { exitBox.textContent = '⚠️ Could not save. Use ▾ → Save to a file.'; });
+    clearTimeout(exitTimer);
+    exitTimer = setTimeout(() => { exitBox.hidden = true; }, 4000); // (the player stayed)
+    e.preventDefault();
+    e.returnValue = ''; // older browsers need this to show the box
+  });
+  // Phones and tab switching: no "Leave site?" box there, so save quietly when the page is hidden.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && unsaved()) saveTo('exit').catch(() => {}); });
+
+  /** Put a loaded game on the map. It starts paused, so the player can look around first. */
+  function install(loaded, warnings) {
+    state = loaded;
+    scenario = state.scenario;
+    popups.length = 0;
+    busy = false;
+    acc = 0;
+    ui.select(null);
+    ui.selectCrew(null);
+    renderer.reset();
+    ui.clearBanners();
+    window.__state = state;
+    window.__renderer = renderer;
+    lastSaved = { st: state, hour: state.hour }; // nothing new to save yet
+    refresh();
+    renderer.centerOnBase(state, false);
+    setSpeed(0);
+    ui.capcom({ level: 'good', title: `💾 Game loaded: Day ${LW.Sim.day(state.hour)}`,
+      text: 'The game is paused. Press ▶ (or Space) when you are ready.' + (warnings.length ? ' ⚠️ ' + warnings.join(' ') : '') });
+    // Saved while new astronauts were waiting for their jobs: ask again.
+    if (state.pendingCrew > 0) {
+      ui.showNewCrew(state, state.landedPadId, (roles) => { LW.Sim.joinCrew(state, roles, state.landedPadId); refresh(); });
+    }
+  }
+  /** Load a save (from this device or a file). view: the open menu, to show a problem in. */
+  function loadEnv(env, view) {
+    const r = LW.Save.unpack(env);
+    if (!r.ok) { if (view) view.say('❌ ' + r.why, 'bad'); else warn("Can't load this save", r.why); return; }
+    ui.closeModal();
+    install(r.state, r.warnings);
+  }
+  function loadSlot(slot, back, view) {
+    LW.Save.get(slot).then(
+      (env) => (env ? loadEnv(env, view) : view ? view.say('❌ This save is gone.', 'bad') : openLoadList(back)),
+      (err) => (view ? view.say('❌ ' + err.message, 'bad') : warn("Can't load", err.message)));
+  }
+  function openLoadList(back) {
+    LW.Save.list().then((list) => {
+      const view = ui.showLoad(list, (slot) => loadSlot(slot, back, view), back);
+    }, (err) => { const view = ui.showLoad([], () => {}, back); view.say('❌ ' + err.message, 'bad'); });
+  }
+  function importFile(view) {
+    LW.Save.pickFile((env, why) => {
+      if (!env) { if (view) view.say('❌ ' + why, 'bad'); else warn("Can't load this file", why); return; }
+      loadEnv(env, view);
+    });
+  }
+
+  // The 💾 button: save now, save to a file, load. The game waits while the menu is open.
+  function openGameMenu(resumeAt) {
+    if (!state || ui.isModalOpen()) return;
+    if (busy) { ui.nudge('Wait until the spaceship has landed.'); return; }
+    if (state.status !== 'running') { menu(); return; }
+    const resume = resumeAt != null ? resumeAt : speed;
+    setSpeed(0);
+    ui.tooltip(state, null, false);
+    const view = ui.showGameMenu(state, {
+      save: () => saveTo('manual').then(() => view.say(`✅ Saved (Day ${LW.Sim.day(state.hour)}).`, 'good'), (err) => view.say('❌ ' + err.message, 'bad')),
+      exportFile: () => {
+        try { LW.Save.exportFile(LW.Save.pack(state)); view.say('✅ The save file is downloading. Keep it somewhere safe.', 'good'); }
+        catch (err) { view.say('❌ ' + err.message, 'bad'); }
+      },
+      // "Back" from the load list comes back to this menu.
+      loadList: () => openLoadList(() => { ui.closeModal(); openGameMenu(resume); }),
+      importFile: () => importFile(view),
+      mainMenu: () => menu(),
+      close: () => setSpeed(resume),
+    });
+  }
+  saveBtn.addEventListener('click', quickSave);
+  document.getElementById('saveMenuBtn').addEventListener('click', () => openGameMenu());
 
   // Pop-ups that must be seen, one after another. The game waits while one is open:
   //  - an astronaut sent home to Earth
@@ -175,6 +307,7 @@
     }
     nextPopup(); // (if the mission just ended, the debrief explains it instead)
     refresh();
+    if (state.status === 'running' && state.hour % LW.CONFIG.save.autoEveryH === 0) autosave();
     if (state.status !== 'running') {
       setSpeed(0);
       ui.clearBanners();
@@ -316,6 +449,8 @@
   }
 
   window.addEventListener('keydown', (e) => {
+    // Ctrl+S = save now (instead of the browser saving the web page).
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); quickSave(); return; }
     if (ui.isModalOpen() || !state) return;
     const crewKey = e.shiftKey && /^Digit[1-9]$/.test(e.code) ? +e.code.slice(5) : 0;
     if (e.code === 'Space') { e.preventDefault(); setSpeed(speed ? 0 : lastSpeed); }

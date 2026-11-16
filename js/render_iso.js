@@ -827,6 +827,15 @@
       if (p.riders) { ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText('👩‍🚀' + p.riders, g.x, g.y - 20); }
     }
 
+    // Moon dust kicked up by the spaceship's exhaust near the ground (sq: 1 = flat circle, 0.5 = squashed for 2.5D).
+    function shipDust(f, x, y, sq) {
+      const n = f.burst ? 26 : f.dust > 0 && Math.random() < f.dust ? 2 : 0;
+      for (let k = 0; k < n; k++) {
+        const a = Math.random() * Math.PI * 2, sp = 50 + Math.random() * 70, r0 = 14 + Math.random() * 6;
+        spawn(1, x + Math.cos(a) * r0, y + Math.sin(a) * r0 * sq, Math.cos(a) * sp, Math.sin(a) * sp * sq, 0.7 + Math.random() * 0.5, 'rgba(200,200,205,0.75)');
+      }
+    }
+
     // ---------- meteor shower animation ----------
 
     function spawnMeteors(dt) {
@@ -1031,6 +1040,19 @@
         people.push({ depth: a.c + a.r, draw: () => drawAstronaut(A, a, LW.Sim.isExposed(A), danger, blink, sel) });
       });
 
+      // The crew spaceship (js/ship.js): a small 3D lander coming straight down onto its Landing Pad, drawn just
+      // after the pad in depth order. It is drawn on the map, so it lands on the pad wherever the camera is.
+      const ship = ui.ship;
+      let shipAt = null;
+      if (ship) {
+        const pad = state.modules.find((m) => m.id === ship.padId);
+        const g = up(P(ship.c, ship.r), pad ? liftOf(pad) : liftAt(ship.c, ship.r));
+        shipAt = { x: g.x, y: g.y - HEIGHT.pad }; // on top of the pad's slab
+        const L = pad ? lightAt(state, pad) : 1, len = 1.2 * (1 + (1 - L) * 1.5); // squares, like the buildings' shadows
+        const d = gridDir(-sg.c * len, -sg.r * len), sh = { dx: d.x, dy: d.y, light: L };
+        people.push({ depth: ship.c + ship.r + 0.01, draw: () => { LW.Ship.drawIso(ctx, shipAt.x, shipAt.y, ship, sh, time); shipDust(ship, shipAt.x, shipAt.y, 0.5); } });
+      }
+
       // Draw buildings and people from the back of the map to the front, so nearer things cover farther ones.
       const things = state.modules.filter(onScreen).map((m) => ({ depth: m.c + m.w / 2 + m.r + m.h / 2, draw: () => drawModuleOnGround(state, m, blink) }));
       for (const t of things.concat(people).sort((a, b) => a.depth - b.depth)) t.draw();
@@ -1102,6 +1124,8 @@
           poly(m ? footprint(m.c, m.r, m.w, m.h, 0) : footprint(c, r, 1, 1, 0), m ? liftOf(m) : liftAt(c, r)); ctx.stroke();
         }
       }
+
+      if (shipAt) LW.Ship.label(ctx, shipAt.x, shipAt.y - 100, ship.text, ship.label, zoom); // "Your crew has landed!", above the ship
 
       // screen-space overlays
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);

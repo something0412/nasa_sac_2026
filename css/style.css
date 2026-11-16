@@ -311,21 +311,23 @@ html, body { height: 100%; overflow: hidden; }
 .ams .amsTop { font-size: 11px; }
 .crewPick { max-height: 160px; overflow-y: auto; scrollbar-width: thin; }
 
-/* ----- crew spaceship landing (TEMPORARY cartoon, plays over the map in both views) ----- */
-/* --lx / --ly = where it touches down (the Landing Pad on screen); default = the middle of the map. */
-.landing { --lx: 50%; --ly: 50%; position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
-.lShip { position: absolute; left: var(--lx); top: -190px; transform: translateX(-50%); animation: lDescend 2.6s cubic-bezier(.2,.7,.3,1) forwards, lBob 0.5s 2.6s ease-out 1; }
-.lShip svg { display: block; filter: drop-shadow(0 8px 10px rgba(0,0,0,.5)); }
-.lFlame { transform-origin: 60px 116px; animation: lFlame 0.12s infinite alternate, lFlameOut 0.4s 2.4s forwards; }
-.lDust { position: absolute; left: var(--lx); top: calc(var(--ly) - 7px); width: 40px; height: 14px; margin-left: -20px; border-radius: 50%; background: rgba(200,200,205,.7); opacity: 0; animation: lDust 1.4s 2.2s ease-out forwards; }
-.lText { position: absolute; left: var(--lx); top: calc(var(--ly) + 26px); transform: translateX(-50%); padding: 6px 14px; border-radius: 999px; background: rgba(12,16,26,.9); border: 1px solid var(--gold); color: var(--gold); font-weight: 700; opacity: 0; animation: lText 0.5s 2.5s forwards; white-space: nowrap; }
-@keyframes lDescend { from { top: -190px; } to { top: calc(var(--ly) - 150px); } } /* the legs (150 px down the picture) end on the spot */
-@keyframes lBob { 50% { margin-top: 4px; } }
-@keyframes lFlame { from { transform: scaleY(1); } to { transform: scaleY(0.6); } }
-@keyframes lFlameOut { to { opacity: 0; } }
-@keyframes lDust { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(9, 4); } }
-@keyframes lText { to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .lShip { animation: none; top: calc(var(--ly) - 150px); } .lFlame, .lDust { animation: none; opacity: 0; } .lText { animation: none; opacity: 1; } }
+/* ----- line icons for saving and loading (js/icons.js) ----- */
+.lineIco { width: 1.15em; height: 1.15em; vertical-align: -0.22em; flex: none; }
+.lineIco.ok { color: var(--ok); }
+.choice .big .lineIco { width: 30px; height: 30px; display: block; }
+#saveBtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+#saveBtn .lineIco { vertical-align: 0; }
+.exitSaving .lineIco, .saveMsg .lineIco { margin-right: 2px; }
+
+/* ----- "Loading…" pop-up shown while the page starts (index.html) ----- */
+.modalBox.loadingBox { max-width: 300px; }
+.loading { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0 4px; text-align: center; }
+.loading h2 { margin: 6px 0 0; }
+.loading p { margin: 0; }
+/* turns with transform, so it keeps spinning even while the page is busy painting the ground */
+.spinner { width: 40px; height: 40px; border-radius: 50%; border: 4px solid rgba(255, 211, 107, 0.2); border-top-color: var(--gold); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
 /* ----- new crew roles + rover dialogs ----- */
 .newCrew { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }

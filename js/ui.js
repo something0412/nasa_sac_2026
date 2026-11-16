@@ -448,10 +448,14 @@
 
     // ----- modals -----
     function modal(html) {
+      $('modal').querySelector('.modalBox').classList.remove('loadingBox'); // (the "Loading…" box at start-up is narrow)
       $('modalBody').innerHTML = html;
       $('modal').hidden = false;
+      // Open at the top. (Focusing the first button must not scroll: in a long pop-up like the debrief it sits
+      // at the bottom, and the title and the cause chain would start out of sight.)
+      $('modal').querySelector('.modalBox').scrollTop = 0;
       const first = $('modalBody').querySelector('button');
-      if (first) first.focus();
+      if (first) first.focus({ preventScroll: true });
     }
     function closeModal() { $('modal').hidden = true; }
     const isModalOpen = () => !$('modal').hidden;
@@ -480,7 +484,8 @@
     }
 
     // ----- saves -----
-    const SLOT_NAMES = { manual: '💾 Your save', 'auto-0': '🔄 Autosave', 'auto-1': '🔄 Autosave', exit: '🚪 Saved when you left' };
+    const lineIcon = LW.Icons.icon; // save / folder / upload / download / check line icons (js/icons.js)
+    const SLOT_NAMES = { manual: `${lineIcon('save')} Your save`, 'auto-0': '🔄 Autosave', 'auto-1': '🔄 Autosave', exit: '🚪 Saved when you left' };
     function ago(iso) {
       const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
       if (!isFinite(s)) return '';
@@ -498,7 +503,7 @@
       const show = (list) => {
         if (!row.isConnected || $('modalBody').firstElementChild !== body) return; // the menu was closed meanwhile
         row.innerHTML = (list.length ? `<button class="primary cont" data-a="cont">▶ Continue: ${saveLine(list[0])}</button>` : '') +
-          `<div class="row tight">${list.length > 1 ? `<button data-a="list">📂 Other saves (${list.length - 1})</button>` : ''}<button data-a="import">📥 Load from a file</button></div>`;
+          `<div class="row tight">${list.length > 1 ? `<button data-a="list">${lineIcon('folder')} Other saves (${list.length - 1})</button>` : ''}<button data-a="import">${lineIcon('upload')} Load from a file</button></div>`;
         row.hidden = false;
         const on = (a, fn) => { const b = row.querySelector(`[data-a=${a}]`); if (b) b.addEventListener('click', fn); };
         on('cont', () => saves.onLoad(list[0].slot));
@@ -509,22 +514,21 @@
     }
 
     /**
-     * The 💾 menu during a game (the game waits while it is open).
+     * The Save ▾ menu during a game (the game waits while it is open).
      * h: { save, exportFile, loadList, importFile, mainMenu, close }. Returns { say(text, level) }.
      */
     function showGameMenu(state, h) {
       modal(`
-        <h2>💾 Game menu</h2>
+        <h2>${lineIcon('save')} Game menu</h2>
         <p class="lead">Day ${LW.Sim.day(state.hour)} · the game is paused. Saves stay in this browser on this device. To play on another computer, save to a file and load it there.</p>
         <div class="choices">
-          <button class="choice" data-a="save"><span class="big">💾</span><b>Save now</b><span>Replaces "Your save". (The game also saves by itself every ${C.save.autoEveryH / 24} days.)</span></button>
-          <button class="choice" data-a="export"><span class="big">📤</span><b>Save to a file</b><span>Download a .json file you can take to another computer.</span></button>
-          <button class="choice" data-a="load"><span class="big">📂</span><b>Load a save</b><span>Go back to a saved game on this device.</span></button>
-          <button class="choice" data-a="import"><span class="big">📥</span><b>Load from a file</b><span>Open a .json save file.</span></button>
+          <button class="choice" data-a="save"><span class="big">${lineIcon('save')}</span><b>Save now</b><span>Replaces "Your save". (The game also saves by itself every ${C.save.autoEveryH / 24} days.)</span></button>
+          <button class="choice" data-a="export"><span class="big">${lineIcon('download')}</span><b>Save to a file</b><span>Download a .json file you can take to another computer.</span></button>
+          <button class="choice" data-a="load"><span class="big">${lineIcon('folder')}</span><b>Load a save</b><span>Go back to a saved game on this device.</span></button>
+          <button class="choice" data-a="import"><span class="big">${lineIcon('upload')}</span><b>Load from a file</b><span>Open a .json save file.</span></button>
         </div>
         <p class="saveMsg" aria-live="polite"></p>
         <div class="row"><button class="primary" data-a="close">▶ Back to the game</button><button data-a="menu">Main menu</button></div>`);
-      const say = (text, level) => { const p = $('modalBody').querySelector('.saveMsg'); if (p) { p.textContent = text; p.className = 'saveMsg ' + (level || ''); } };
       const on = (a, fn) => $('modalBody').querySelector(`[data-a=${a}]`).addEventListener('click', fn);
       on('save', () => h.save());
       on('export', () => h.exportFile());
@@ -532,20 +536,28 @@
       on('import', () => h.importFile());
       on('close', () => { closeModal(); h.close(); });
       on('menu', () => { closeModal(); h.mainMenu(); });
-      return { say };
+      return { say: saySave };
+    }
+
+    /** A message under the save buttons ('good' ones get the green check icon). */
+    function saySave(text, level) {
+      const p = $('modalBody').querySelector('.saveMsg');
+      if (!p) return;
+      p.innerHTML = (level === 'good' ? lineIcon('check', 'ok') + ' ' : '') + esc(text);
+      p.className = 'saveMsg ' + (level || '');
     }
 
     /** Every save on this device. onPick(slot); onBack() returns to the menu that opened this. */
     function showLoad(list, onPick, onBack) {
       modal(`
-        <h2>📂 Saved games on this device</h2>
+        <h2>${lineIcon('folder')} Saved games on this device</h2>
         ${list.length ? `<div class="saveList">${list.map((e) => `<button class="saveItem" data-slot="${esc(e.slot)}">${saveLine(e)}</button>`).join('')}</div>`
-          : '<p class="muted">No saved games yet. The game saves by itself every ' + C.save.autoEveryH / 24 + ' days, or use 💾 Save now.</p>'}
+          : '<p class="muted">No saved games yet. The game saves by itself every ' + C.save.autoEveryH / 24 + ' days, or use ' + lineIcon('save') + ' Save now.</p>'}
         <p class="saveMsg" aria-live="polite"></p>
         <div class="row"><button data-a="back">← Back</button></div>`);
       $('modalBody').querySelectorAll('[data-slot]').forEach((b) => b.addEventListener('click', () => onPick(b.dataset.slot)));
       $('modalBody').querySelector('[data-a=back]').addEventListener('click', () => onBack());
-      return { say: (text, level) => { const p = $('modalBody').querySelector('.saveMsg'); if (p) { p.textContent = text; p.className = 'saveMsg ' + (level || ''); } } };
+      return { say: saySave };
     }
 
     // ----- Astronomy Tower: NASA picture of the day under a fishbowl lens (js/apod.js) -----
@@ -589,34 +601,6 @@
         <p class="muted">${ev.left ? `${ev.left} astronaut${ev.left > 1 ? 's' : ''} left at the base. If every astronaut is sent home, the mission ends.` : 'Nobody is left at the base.'}</p>
         <div class="row"><button class="primary" data-a="ok">OK</button></div>`);
       $('modalBody').querySelector('[data-a=ok]').addEventListener('click', () => { closeModal(); onClose(); });
-    }
-
-    // ----- crew spaceship landing: a cartoon spaceship touches down on the map (plays over both views) -----
-    // TEMPORARY art: plain shapes, meant to be replaced with better models later.
-    // at = {x, y}: where on the map (stage pixels) it touches down; default = the middle of the screen.
-    function playLanding(onDone, text, at) {
-      const el = document.createElement('div');
-      el.className = 'landing';
-      el.setAttribute('aria-hidden', 'true');
-      el.innerHTML = `
-        <div class="lShip">
-          <svg viewBox="0 0 120 170" width="120" height="170">
-            <path d="M60 4 C82 26 88 62 86 104 L34 104 C32 62 38 26 60 4Z" fill="#eef2f7" stroke="#8f96a3" stroke-width="3"/>
-            <path d="M60 4 C70 14 76 26 79 40 L41 40 C44 26 50 14 60 4Z" fill="#ff6b5d"/>
-            <circle cx="60" cy="64" r="12" fill="#7fd0ff" stroke="#5b6576" stroke-width="3"/>
-            <path d="M34 80 L12 116 L14 128 L36 108Z M86 80 L108 116 L106 128 L84 108Z" fill="#ff6b5d" stroke="#b5463c" stroke-width="2"/>
-            <rect x="44" y="104" width="32" height="10" rx="3" fill="#5b6576"/>
-            <path d="M40 114 L28 150 M80 114 L92 150" stroke="#9aa2af" stroke-width="4" stroke-linecap="round"/>
-            <path d="M22 150 L34 150 M86 150 L98 150" stroke="#9aa2af" stroke-width="4" stroke-linecap="round"/>
-            <path class="lFlame" d="M48 116 Q60 168 72 116Z" fill="#ffb347"/>
-          </svg>
-        </div>
-        <div class="lDust"></div>
-        <div class="lText">${esc(text || '🚀 The crew spaceship has landed!')}</div>`;
-      if (at) { el.style.setProperty('--lx', Math.round(at.x) + 'px'); el.style.setProperty('--ly', Math.round(at.y) + 'px'); }
-      $('stage').appendChild(el);
-      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      setTimeout(() => { el.remove(); onDone(); }, reduce ? 900 : 3600);
     }
 
     // ----- new crew: the player picks the job of each new astronaut (the game waits) -----
@@ -826,7 +810,7 @@
 
     return {
       togglePanel, live, update, capcom, setSpeed, tooltip, showStart, showGameMenu, showLoad, closeModal, banner, clearBanners, showDebrief, showTower, showResearch, showSentHome, isModalOpen,
-      playLanding, showNewCrew, showPickPad, showRover,
+      showNewCrew, showPickPad, showRover,
 
 
       select, pickBuild, selectCrew, nudge,

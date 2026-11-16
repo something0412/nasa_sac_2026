@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Drawing the map. Runs every frame (60 fps). Reads the sim state, never changes it.
 // The world is bigger than the screen: a camera (cam.x, cam.y = top-left corner in world pixels)
 // picks which part we see. Drag the map to move the camera.
@@ -443,6 +444,15 @@
       ctx.restore();
     }
 
+    // Moon dust kicked up by the spaceship's exhaust near the ground (sq: 1 = flat circle, 0.5 = squashed for 2.5D).
+    function shipDust(f, x, y, sq) {
+      const n = f.burst ? 26 : f.dust > 0 && Math.random() < f.dust ? 2 : 0;
+      for (let k = 0; k < n; k++) {
+        const a = Math.random() * Math.PI * 2, sp = 50 + Math.random() * 70, r0 = 14 + Math.random() * 6;
+        spawn(1, x + Math.cos(a) * r0, y + Math.sin(a) * r0 * sq, Math.cos(a) * sp, Math.sin(a) * sp * sq, 0.7 + Math.random() * 0.5, 'rgba(200,200,205,0.75)');
+      }
+    }
+
     // ---------- meteor shower animation ----------
     // Meteors streak in from one direction (a shower's "radiant"), flash where they land and kick up dust.
     function spawnMeteors(dt) {
@@ -667,6 +677,16 @@
         ctx.fillStyle = '#ffd36b'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(A.id), a.x, a.y - 9.5);
       });
 
+      // The crew spaceship (js/ship.js), seen from straight above, coming down onto its Landing Pad. It is drawn
+      // on the map, so it lands on the pad wherever the camera is.
+      const ship = ui.ship;
+      if (ship) {
+        const pad = state.modules.find((m) => m.id === ship.padId), L = pad ? lightAt(state, pad) : 1;
+        const len = 40 * (1 + (1 - L) * 1.5); // as tall as the HAB's shadow, longer as the Sun gets low
+        LW.Ship.drawFlat(ctx, ship.c * T, ship.r * T, ship, { dx: -sv.x * len, dy: -sv.y * len, light: L }, time);
+        shipDust(ship, ship.c * T, ship.r * T, 1);
+      }
+
       // radiation storm particles stream in from the Sun's direction, across what the camera sees
       if (state.stormRate > C.rad.stormOn) {
         const n = Math.min(6, state.stormRate * 0.6 + 0.5);
@@ -733,6 +753,8 @@
           else ctx.strokeRect(c * T + 1, r * T + 1, T - 2, T - 2);
         }
       }
+
+      if (ship) LW.Ship.label(ctx, ship.c * T, ship.r * T - 58, ship.text, ship.label, zoom); // "Your crew has landed!", above the pad
 
       // screen-space overlays
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);

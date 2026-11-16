@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Map view switch: top-down (render.js) or isometric 2.5D (render_iso.js).
 // Gives main.js ONE renderer object with the usual functions (draw, tileAt, ...) and sends each call to
 // whichever view is showing. Press V (or the 🧊 button) to switch. The player's choice is remembered.
@@ -5,15 +6,20 @@
   'use strict';
   const LW = (root.LW = root.LW || {});
 
-  const DEFAULT_VIEW = 'top'; // change to 'iso' to make the 2.5D view the default for new players
-  const STORE_KEY = 'lunar-world.view';
-  // Settings used to be stored as 'mt.view' (old name of the game); move them over once.
-  try { if (localStorage.getItem(STORE_KEY) === null && localStorage.getItem('mt.view') !== null) { localStorage.setItem(STORE_KEY, localStorage.getItem('mt.view')); localStorage.removeItem('mt.view'); } } catch (e) { /* storage blocked: fine */ }
+  const DEFAULT_VIEW = 'iso'; // the 2.5D view is the default; 'top' would make the top-down view the default
+  // The player's choice is remembered under STORE_KEY. The 2.5D view became the default when this key was
+  // introduced, so choices saved under the older keys are dropped once and everybody starts in 2.5D.
+  const STORE_KEY = 'lunar-world.view2';
+  try { for (const old of ['lunar-world.view', 'mt.view']) localStorage.removeItem(old); } catch (e) { /* storage blocked: fine */ }
 
   function ViewSwitch(canvas, forecastCanvas) {
     // One shared set of astronaut positions for both views, moved every frame (whichever view is showing).
     const motion = LW.CrewMotion();
     const views = { top: LW.Renderer(canvas, forecastCanvas, motion), iso: LW.IsoRenderer(canvas, motion) };
+    // The crew spaceship landing: one clock for both views, so it keeps going through a view switch.
+    // Each frame, the view on screen gets ui.ship and draws the ship on its Landing Pad (in map coordinates,
+    // so it lands on the pad wherever the camera is).
+    const landing = LW.ShipLanding();
     let name = DEFAULT_VIEW;
     try { const saved = root.localStorage.getItem(STORE_KEY); if (views[saved]) name = saved; } catch (e) { /* storage blocked: use default */ }
     let lastState = null;
@@ -50,7 +56,17 @@
     }
 
     return {
-      draw: (state, dt, ui) => { lastState = state; motion.update(state, dt, ui && ui.paused, ui && ui.frac); cur().draw(state, dt, ui); prepareOther(); },
+      draw: (state, dt, ui) => {
+        ui = ui || {};
+        lastState = state;
+        motion.update(state, dt, ui.paused, ui.frac);
+        ui.ship = landing.update(dt);
+        cur().draw(state, dt, ui);
+        prepareOther();
+      },
+      /** The crew spaceship touches down on Landing Pad `pad`; onDone runs once it has landed. */
+      playLanding: (pad, text, onDone) => landing.play(pad, text, onDone),
+      prepare: (state) => cur().prepare(state), // paint the ground of the view on screen now (start-up)
       drawForecast: (state) => views.top.drawForecast(state), // the sunlight strip is the same in both views
       tileAt: (e) => cur().tileAt(e),
       toCanvas: (e) => cur().toCanvas(e),
@@ -58,13 +74,13 @@
       crewAt: (e) => (cur().crewAt ? cur().crewAt(e) : null), // the astronaut under the mouse (click to pick them)
       centerOnBase: (state, smooth) => cur().centerOnBase(state, smooth),
       centerOnTile: (c, r, smooth) => cur().centerOnTile(c, r, smooth),
-      screenOf: (c, r) => cur().screenOf(c, r), // grid point → pixels on the map (for the landing animation)
+      screenOf: (c, r) => cur().screenOf(c, r), // grid point → pixels on the map
       panStart: () => cur().panStart(),
       panTo: (x, y) => cur().panTo(x, y),
       zoomAt: (e, factor) => { if (cur().zoomAt) cur().zoomAt(e, factor); },
       canZoom: () => !!cur().zoomAt,
       debug: () => ({ view: name, ...cur().debug() }),
-      reset: (...a) => { motion.reset(); both('reset')(...a); },
+      reset: (...a) => { motion.reset(); landing.clear(); both('reset')(...a); },
       resize: both('resize'),
       setSafeArea: both('setSafeArea'),
       view: () => name,

@@ -12,7 +12,9 @@ endless: it only ends when no astronaut is left on the Moon.
   The starting base already has one Landing Pad next to HAB 1 (the opening animation lands on it).
   No two Landing Pads may be within 6 squares of each other, so each pad clearly belongs to one HAB.
   No such pad when it arrives = it flies back, and the next one comes 30 days later.
-- Every game also opens with the crew's spaceship landing at the base (animation only).
+- Every game also opens with the crew's spaceship landing on the starting Landing Pad (animation only). It is drawn
+  on the map in both views (flat from above in the top-down view, a small 3D lander in 2.5D), so it always comes
+  down on the pad, even if you pan the camera away; after a short stop it flies back up.
 - Running out of oxygen, heat (habitat below 5 °C), food (3 days) or water (2 days) makes the astronauts lose
   health every hour; when an astronaut's health runs out they are sent home to Earth.
 - Cargo landers come every 10 days. Game speed: 1 game hour = 2 s at ▶ (▶▶ and ▶▶▶ are 2x and 4x).
@@ -50,7 +52,7 @@ map, or Shift+1-9), then pick what they do:
 
 With nobody picked, click a module to turn it ON/OFF, or a building site to cancel it (parts back).
 Space = pause. Esc / right-click = stop building, then un-pick the astronaut.
-V (or the 🧊 button) = switch between the top-down and the 2.5D isometric view; scroll wheel or +/- = zoom.
+V (or the 🧊 button) = switch between the 2.5D isometric view (the default) and the top-down view; scroll wheel or +/- = zoom.
 
 Drag the map to look around (the world is 80 x 56 tiles, the view shows 20 x 14). If the base is off-screen,
 a 🏠 BASE tag on the edge points the way; click it or press H to fly back.
@@ -81,6 +83,8 @@ css/style.css       look and feel
 js/config.js        ALL game numbers, with sources (REAL vs GAME-tuned)
 js/sim.js           the rules (no drawing): one step() = one game hour
 js/render.js        map drawing at 60 fps (offscreen ground, particle pool)
+js/ship.js          the crew spaceship landing: its timing and its flat and 2.5D looks
+js/icons.js         line icons for saving and loading (floppy disk, folder, upload, download, check)
 js/ui.js            side panel, pop-ups, debrief
 js/apod.js          Astronomy Tower: NASA picture of the day under a fishbowl lens (needs internet)
 js/main.js          game loop: fixed 1-hour sim tick, separate from drawing
@@ -116,3 +120,19 @@ Refresh the data: `python tools/build_may2024.py [YOUR_API_KEY]` and `python too
   (`science.nasa.gov/wp-json/wp/v2/apod-basic`, no key). The newest image post is shown; video days are skipped.
   This is the only feature that needs internet; it falls back to the last picture received.
 - Shielding fractions, module power and production rates are game-tuned (marked GAME in `js/config.js`).
+
+## AI use
+
+As the NASA Space Apps rules ask, this is where and how we used AI (Super Intelligence) tools.
+
+- **Tool:** [Claude Code](https://claude.com/claude-code), an AI coding assistant by Anthropic (Claude Opus model).
+- **Code:** AI helped write most of the game code (`js/`, `css/`, `index.html`), the automated tests (`tests/`) and the
+  Python scripts that download NASA data (`tools/`). It also helped merge the team's branches and fix speed problems.
+  Every AI-assisted file starts with a note saying so, and `index.html` has an `ai-assistance` meta tag.
+- **Presentation:** AI helped draft the presentation script.
+- **What the team did:** the game idea, the design decisions, play-testing and feedback, and reviewing and testing
+  all AI-written code before it was merged.
+- **Not AI-generated:** all science numbers and solar storm events are real NASA data (DONKI, LRO CRaTER via RadLab,
+  BVAD; see *Data and sources*). AI only wrote the scripts that download and format them. The Astronomy Tower pictures
+  are NASA's Astronomy Picture of the Day, loaded live. The game has no AI-generated images, audio or video:
+  everything on screen is drawn by code.

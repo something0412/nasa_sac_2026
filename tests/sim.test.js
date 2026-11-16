@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Run: node --test tests/sim.test.js   (from the project root)
 // Plays whole missions with simple "bot" strategies to check the game is winnable but not too easy.
 const test = require('node:test');

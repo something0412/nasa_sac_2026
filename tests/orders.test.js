@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Run: node --test tests/orders.test.js   (from the project root)
 // Orders take effect right away (LW.Sim.applyOrders), without moving the clock or using randomness.
 const test = require('node:test');

@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Astronomy Tower: shows NASA's Astronomy Picture of the Day (APOD) under a "fishbowl" lens
 // that follows the cursor.
 //

@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 

@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Run: node --test tests/crew_motion.test.js   (from the project root)
 // The shared astronaut positions used by both map views (js/crew_motion.js).
 const test = require('node:test');

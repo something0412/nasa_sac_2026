@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Simulation: the rules of the outpost. No drawing, no DOM. One step() = one game hour.
 (function (root) {
   'use strict';

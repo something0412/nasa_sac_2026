@@ -116,8 +116,7 @@
     setSpeed(0);
     const pad = state.modules.find((m) => m.type === 'pad'); // it touches down on the starting Landing Pad
     renderer.centerOnBase(state, false);
-    const at = pad ? renderer.screenOf(pad.c + pad.w / 2, pad.r + pad.h / 2) : null;
-    ui.playLanding(() => { busy = false; setSpeed(1); }, '🚀 Your crew has landed at Zain Base!', at);
+    renderer.playLanding(pad, '🚀 Your crew has landed at Zain Base!', () => { busy = false; setSpeed(1); });
   }
 
   function menu() {
@@ -145,17 +144,20 @@
   let lastSaved = null;
   const unsaved = () => canSave() && state.hour > 0 && !(lastSaved && lastSaved.st === state && lastSaved.hour === state.hour);
 
-  // The Save button shows what is happening on its own label: "Saving…", then "✅ Saved".
+  // The Save button shows what is happening on its own label: "Saving…", then "Saved" with a check.
+  // (Line icons from js/icons.js: floppy disk, check.)
+  const icon = LW.Icons.icon;
   const saveBtn = document.getElementById('saveBtn');
-  const SAVE_LABEL = saveBtn.textContent;
+  const SAVE_LABEL = `${icon('save')} Save`;
+  saveBtn.innerHTML = SAVE_LABEL;
   let labelTimer = 0, autoFailed = false;
-  function saveLabel(text, ms) {
+  function saveLabel(html, ms) {
     clearTimeout(labelTimer);
-    saveBtn.textContent = text;
-    if (ms) labelTimer = setTimeout(() => { saveBtn.textContent = SAVE_LABEL; }, ms);
+    saveBtn.innerHTML = html;
+    if (ms) labelTimer = setTimeout(() => { saveBtn.innerHTML = SAVE_LABEL; }, ms);
   }
   function autosave() {
-    saveTo(LW.Save.autoSlot(state.hour)).then(() => { autoFailed = false; saveLabel('✅ Autosaved', 2000); }, (err) => {
+    saveTo(LW.Save.autoSlot(state.hour)).then(() => { autoFailed = false; saveLabel(`${icon('check', 'ok')} Autosaved`, 2000); }, (err) => {
       if (autoFailed) return; // say it once, not every 10 days
       autoFailed = true;
       warn('Autosave did not work', `${err.message} Use ▾ → Save to a file to keep your game.`);
@@ -164,8 +166,8 @@
   // The Save button and Ctrl+S: one click saves into "Your save".
   function quickSave() {
     if (!state || ui.isModalOpen()) return;
-    saveLabel('💾 Saving…');
-    saveTo('manual').then(() => saveLabel('✅ Saved', 2000), (err) => { saveLabel(SAVE_LABEL); warn("Can't save", err.message); });
+    saveLabel(`${icon('save')} Saving…`);
+    saveTo('manual').then(() => saveLabel(`${icon('check', 'ok')} Saved`, 2000), (err) => { saveLabel(SAVE_LABEL); warn("Can't save", err.message); });
   }
 
   // Closing the tab: the browser does not let a page show its own pop-up there, only its "Leave site?" box.
@@ -175,9 +177,9 @@
   let exitTimer = 0;
   window.addEventListener('beforeunload', (e) => {
     if (!unsaved()) return;
-    exitBox.textContent = '💾 Saving your game…';
+    exitBox.innerHTML = `${icon('save')} Saving your game…`;
     exitBox.hidden = false;
-    saveTo('exit').then(() => { exitBox.textContent = '✅ Game saved. You can close the tab.'; }, () => { exitBox.textContent = '⚠️ Could not save. Use ▾ → Save to a file.'; });
+    saveTo('exit').then(() => { exitBox.innerHTML = `${icon('check', 'ok')} Game saved. You can close the tab.`; }, () => { exitBox.textContent = '⚠️ Could not save. Use ▾ → Save to a file.'; });
     clearTimeout(exitTimer);
     exitTimer = setTimeout(() => { exitBox.hidden = true; }, 4000); // (the player stayed)
     e.preventDefault();
@@ -234,7 +236,7 @@
     });
   }
 
-  // The 💾 button: save now, save to a file, load. The game waits while the menu is open.
+  // The Save ▾ button: save now, save to a file, load. The game waits while the menu is open.
   function openGameMenu(resumeAt) {
     if (!state || ui.isModalOpen()) return;
     if (busy) { ui.nudge('Wait until the spaceship has landed.'); return; }
@@ -243,9 +245,9 @@
     setSpeed(0);
     ui.tooltip(state, null, false);
     const view = ui.showGameMenu(state, {
-      save: () => saveTo('manual').then(() => view.say(`✅ Saved (Day ${LW.Sim.day(state.hour)}).`, 'good'), (err) => view.say('❌ ' + err.message, 'bad')),
+      save: () => saveTo('manual').then(() => view.say(`Saved (Day ${LW.Sim.day(state.hour)}).`, 'good'), (err) => view.say('❌ ' + err.message, 'bad')),
       exportFile: () => {
-        try { LW.Save.exportFile(LW.Save.pack(state)); view.say('✅ The save file is downloading. Keep it somewhere safe.', 'good'); }
+        try { LW.Save.exportFile(LW.Save.pack(state)); view.say('The save file is downloading. Keep it somewhere safe.', 'good'); }
         catch (err) { view.say('❌ ' + err.message, 'bad'); }
       },
       // "Back" from the load list comes back to this menu.
@@ -278,9 +280,8 @@
       // HAB closest to that pad. With more than one ready pad, the player picks where it lands first.
       const land = (padId) => {
         const pad = state.modules.find((m) => m.id === padId);
-        let at = null;
-        if (pad) { renderer.centerOnTile(pad.c + pad.w / 2, pad.r + pad.h / 2, false); at = renderer.screenOf(pad.c + pad.w / 2, pad.r + pad.h / 2); }
-        ui.playLanding(() => {
+        if (pad) renderer.centerOnTile(pad.c + pad.w / 2, pad.r + pad.h / 2, true); // (the ship lands on the pad even if the player pans away)
+        renderer.playLanding(pad, '🚀 The crew spaceship has landed!', () => {
           busy = false;
           ui.showNewCrew(state, padId, (roles) => {
             const added = LW.Sim.joinCrew(state, roles, padId);
@@ -290,7 +291,7 @@
             refresh();
             nextPopup();
           });
-        }, '🚀 The crew spaceship has landed!', at);
+        });
       };
       const pads = ev.pads && ev.pads.length ? ev.pads : [ev.padId];
       if (pads.length > 1) ui.showPickPad(state, pads, land); else land(pads[0]);
@@ -508,6 +509,15 @@
   }
 
 
-  menu();
-  requestAnimationFrame(frame);
+  // Start-up: index.html opens with a "Loading…" pop-up. Painting the Moon's ground takes a moment and the page
+  // can't respond meanwhile, so first let the browser put that pop-up on screen (one frame), then build the
+  // ground, then swap the pop-up for the start menu. (The other view's ground is painted later, in small slices.)
+  requestAnimationFrame(() => setTimeout(() => {
+    state = LW.Sim.create({ scenario: 'training' }); // the map shows behind the menu
+    refresh();
+    renderer.prepare(state);
+    menu();
+    last = performance.now(); // (don't count the loading time as game time)
+    requestAnimationFrame(frame);
+  }, 0));
 })();

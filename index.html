@@ -19,6 +19,10 @@
     <canvas id="forecast" width="900" height="40" aria-label="Sunlight forecast"></canvas>
   </div>
   <button id="viewBtn" class="viewBtn" title="Switch the map between top-down and 2.5D (V)">🧊 2.5D view</button>
+  <div class="saveSplit" role="group" aria-label="Save">
+    <button id="saveBtn" title="Save the game now (Ctrl+S)">💾 Save</button>
+    <button id="saveMenuBtn" title="More: load a save, save to a file, main menu" aria-label="More save options">▾</button>
+  </div>
   <div class="clock"><span id="clockDay">Day 1</span><span id="clockHour">00:00</span><span id="scenarioTag" class="tag"></span></div>
 </header>
 
@@ -87,6 +91,7 @@
   <div class="mapHint">🖐️ Drag to look around · <b>H</b> = back to base · <b>V</b> = switch view · <b>scroll</b> = zoom</div>
 </main>
 
+<div id="exitSaving" class="exitSaving" role="status" aria-live="assertive" hidden></div>
 <div id="modal" class="modal" hidden><div class="modalBox" role="dialog" aria-modal="true"><div id="modalBody"></div></div></div>
 
 <script src="data/may2024.js"></script>
@@ -94,6 +99,7 @@
 <script src="js/config.js"></script>
 <script src="js/iso.js"></script>
 <script src="js/sim.js"></script>
+<script src="js/save.js"></script>
 <script src="js/shapes.js"></script>
 <script src="js/crew_motion.js"></script>
 <script src="js/render.js"></script>

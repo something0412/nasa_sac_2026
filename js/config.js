@@ -277,6 +277,9 @@
     habTemp: { normal: 21, fail: 5, heat: 3, coolDark: 2.0, coolLit: 0.8 },
     fail: { foodGraceH: 72, waterGraceH: 48 }, // after this long without food / water the crew starts losing health
 
+    // SAVES: autosave every 10 game days (two slots that take turns), plus the Save button.
+    save: { autoEveryH: 240 },
+
     cargoEveryH: 240, // a cargo lander every 10 days (you choose what it carries 2 days before)
 
     cargoAskLead: 48,

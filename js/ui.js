@@ -456,10 +456,12 @@
     function closeModal() { $('modal').hidden = true; }
     const isModalOpen = () => !$('modal').hidden;
 
-    function showStart(onChoose) {
+    // saves (optional): { list: Promise of saves on this device, onLoad(slot), onImport(), onLoadList() }
+    function showStart(onChoose, saves) {
       modal(`
         <h1>Lunar World</h1>
         <p class="lead">You are the commander of Zain Base, a Moon base near the lunar south pole, where NASA's Artemis astronauts plan to go. Keep the base running for <b>as many days as you can</b>. It only closes when no astronaut is left on the Moon.</p>
+        <div class="saveRow" hidden></div>
         <div class="howto">
           <div>☀️ <b>Power</b>: the Sun circles the horizon here. Hills block it, so shadows move. Panels in shadow make nothing.</div>
           <div>🫁 <b>Air</b>: the O₂ Generator turns water into oxygen. It needs power AND water.</div>
@@ -474,6 +476,76 @@
           <button class="choice real" data-s="history"><span class="big">📡</span><b>Real history: May 2024</b><span>Replay the real solar storms of May 2024 (biggest in 20 years): NASA DONKI alerts and the radiation NASA's LRO measured at the Moon, hour by hour.</span></button>
         </div>`);
       $('modalBody').querySelectorAll('.choice').forEach((b) => b.addEventListener('click', () => { closeModal(); onChoose(b.dataset.s); }));
+      if (saves) fillSaveRow($('modalBody').querySelector('.saveRow'), saves);
+    }
+
+    // ----- saves -----
+    const SLOT_NAMES = { manual: '💾 Your save', 'auto-0': '🔄 Autosave', 'auto-1': '🔄 Autosave', exit: '🚪 Saved when you left' };
+    function ago(iso) {
+      const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+      if (!isFinite(s)) return '';
+      if (s < 60) return 'just now';
+      if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+      const d = Math.floor(s / 86400);
+      return d === 1 ? 'yesterday' : `${d} days ago`;
+    }
+    const saveLine = (e) => `${esc(e.name)} <span class="muted small">· ${e.summary ? `${e.summary.crew} astronaut${e.summary.crew === 1 ? '' : 's'} · ` : ''}${SLOT_NAMES[e.slot] || ''} · saved ${ago(e.savedAt)}</span>`;
+
+    // Start menu: "Continue" (newest save), "Other saves", "Load from file". Filled in when the list arrives.
+    function fillSaveRow(row, saves) {
+      const body = $('modalBody').firstElementChild;
+      const show = (list) => {
+        if (!row.isConnected || $('modalBody').firstElementChild !== body) return; // the menu was closed meanwhile
+        row.innerHTML = (list.length ? `<button class="primary cont" data-a="cont">▶ Continue: ${saveLine(list[0])}</button>` : '') +
+          `<div class="row tight">${list.length > 1 ? `<button data-a="list">📂 Other saves (${list.length - 1})</button>` : ''}<button data-a="import">📥 Load from a file</button></div>`;
+        row.hidden = false;
+        const on = (a, fn) => { const b = row.querySelector(`[data-a=${a}]`); if (b) b.addEventListener('click', fn); };
+        on('cont', () => saves.onLoad(list[0].slot));
+        on('list', () => saves.onLoadList());
+        on('import', () => saves.onImport());
+      };
+      saves.list.then(show, () => show([]));
+    }
+
+    /**
+     * The 💾 menu during a game (the game waits while it is open).
+     * h: { save, exportFile, loadList, importFile, mainMenu, close }. Returns { say(text, level) }.
+     */
+    function showGameMenu(state, h) {
+      modal(`
+        <h2>💾 Game menu</h2>
+        <p class="lead">Day ${LW.Sim.day(state.hour)} · the game is paused. Saves stay in this browser on this device. To play on another computer, save to a file and load it there.</p>
+        <div class="choices">
+          <button class="choice" data-a="save"><span class="big">💾</span><b>Save now</b><span>Replaces "Your save". (The game also saves by itself every ${C.save.autoEveryH / 24} days.)</span></button>
+          <button class="choice" data-a="export"><span class="big">📤</span><b>Save to a file</b><span>Download a .json file you can take to another computer.</span></button>
+          <button class="choice" data-a="load"><span class="big">📂</span><b>Load a save</b><span>Go back to a saved game on this device.</span></button>
+          <button class="choice" data-a="import"><span class="big">📥</span><b>Load from a file</b><span>Open a .json save file.</span></button>
+        </div>
+        <p class="saveMsg" aria-live="polite"></p>
+        <div class="row"><button class="primary" data-a="close">▶ Back to the game</button><button data-a="menu">Main menu</button></div>`);
+      const say = (text, level) => { const p = $('modalBody').querySelector('.saveMsg'); if (p) { p.textContent = text; p.className = 'saveMsg ' + (level || ''); } };
+      const on = (a, fn) => $('modalBody').querySelector(`[data-a=${a}]`).addEventListener('click', fn);
+      on('save', () => h.save());
+      on('export', () => h.exportFile());
+      on('load', () => h.loadList());
+      on('import', () => h.importFile());
+      on('close', () => { closeModal(); h.close(); });
+      on('menu', () => { closeModal(); h.mainMenu(); });
+      return { say };
+    }
+
+    /** Every save on this device. onPick(slot); onBack() returns to the menu that opened this. */
+    function showLoad(list, onPick, onBack) {
+      modal(`
+        <h2>📂 Saved games on this device</h2>
+        ${list.length ? `<div class="saveList">${list.map((e) => `<button class="saveItem" data-slot="${esc(e.slot)}">${saveLine(e)}</button>`).join('')}</div>`
+          : '<p class="muted">No saved games yet. The game saves by itself every ' + C.save.autoEveryH / 24 + ' days, or use 💾 Save now.</p>'}
+        <p class="saveMsg" aria-live="polite"></p>
+        <div class="row"><button data-a="back">← Back</button></div>`);
+      $('modalBody').querySelectorAll('[data-slot]').forEach((b) => b.addEventListener('click', () => onPick(b.dataset.slot)));
+      $('modalBody').querySelector('[data-a=back]').addEventListener('click', () => onBack());
+      return { say: (text, level) => { const p = $('modalBody').querySelector('.saveMsg'); if (p) { p.textContent = text; p.className = 'saveMsg ' + (level || ''); } } };
     }
 
     // ----- Astronomy Tower: NASA picture of the day under a fishbowl lens (js/apod.js) -----
@@ -753,7 +825,7 @@
     }
 
     return {
-      togglePanel, live, update, capcom, setSpeed, tooltip, showStart, banner, clearBanners, showDebrief, showTower, showResearch, showSentHome, isModalOpen,
+      togglePanel, live, update, capcom, setSpeed, tooltip, showStart, showGameMenu, showLoad, closeModal, banner, clearBanners, showDebrief, showTower, showResearch, showSentHome, isModalOpen,
       playLanding, showNewCrew, showPickPad, showRover,
 
 

@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Line icons for saving and loading (floppy disk, open folder, upload, download, check), drawn as small inline
 // SVGs: rounded 2 px strokes in the text colour (currentColor), so they follow the button or message they sit in.
 (function (root) {

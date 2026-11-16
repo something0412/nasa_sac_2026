@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Isometric (2.5D) map drawing. Same job as render.js (and the same functions, so main.js can use
 // either one), but the Moon is drawn as diamonds and buildings as little 3D blocks.
 // Runs every frame (60 fps). Reads the sim state, never changes it.

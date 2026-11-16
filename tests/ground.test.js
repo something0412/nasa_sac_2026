@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Run: node --test tests/ground.test.js   (from the project root)
 // The 2.5D ground picture can be painted a little at a time (prepareStep), so the game never freezes.
 const test = require('node:test');

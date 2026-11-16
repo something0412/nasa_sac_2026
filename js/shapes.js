@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Small drawing helpers shared by the top-down (render.js) and 2.5D (render_iso.js) renderers:
 // signs drawn on buildings (radiation sign, dumbbell, flask, lightning bolt) and a convex-hull helper.
 // Flat fills only (no images, gradients or blur), so they stay cheap to draw every frame.

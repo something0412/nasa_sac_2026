@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Run: node --test tests/iso.test.js   (from the project root)
 // Checks the isometric math: grid square → screen → grid square must always come back the same.
 const test = require('node:test');

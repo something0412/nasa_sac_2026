@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Map view switch: top-down (render.js) or isometric 2.5D (render_iso.js).
 // Gives main.js ONE renderer object with the usual functions (draw, tileAt, ...) and sends each call to
 // whichever view is showing. Press V (or the 🧊 button) to switch. The player's choice is remembered.

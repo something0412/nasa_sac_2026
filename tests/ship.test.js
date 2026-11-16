@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // The crew spaceship landing (js/ship.js): timing only (the drawing is checked by eye in the browser).
 const test = require('node:test');
 const assert = require('node:assert');

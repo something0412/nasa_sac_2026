@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // All game numbers live here, with where they come from.
 // "REAL" = from a NASA/science source. "GAME" = tuned for fun, but in a realistic range.
 (function (root) {

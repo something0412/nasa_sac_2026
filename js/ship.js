@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // The crew spaceship that touches down on a Landing Pad. Shared by both map views:
 //  - LW.ShipLanding(): the animation clock. view.js runs it every frame and hands the current frame to
 //    whichever renderer is showing, so the ship stays on the pad wherever the camera is (and across a

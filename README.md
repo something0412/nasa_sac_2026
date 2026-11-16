@@ -120,3 +120,19 @@ Refresh the data: `python tools/build_may2024.py [YOUR_API_KEY]` and `python too
   (`science.nasa.gov/wp-json/wp/v2/apod-basic`, no key). The newest image post is shown; video days are skipped.
   This is the only feature that needs internet; it falls back to the last picture received.
 - Shielding fractions, module power and production rates are game-tuned (marked GAME in `js/config.js`).
+
+## AI use
+
+As the NASA Space Apps rules ask, this is where and how we used AI (Super Intelligence) tools.
+
+- **Tool:** [Claude Code](https://claude.com/claude-code), an AI coding assistant by Anthropic (Claude Opus model).
+- **Code:** AI helped write most of the game code (`js/`, `css/`, `index.html`), the automated tests (`tests/`) and the
+  Python scripts that download NASA data (`tools/`). It also helped merge the team's branches and fix speed problems.
+  Every AI-assisted file starts with a note saying so, and `index.html` has an `ai-assistance` meta tag.
+- **Presentation:** AI helped draft the presentation script.
+- **What the team did:** the game idea, the design decisions, play-testing and feedback, and reviewing and testing
+  all AI-written code before it was merged.
+- **Not AI-generated:** all science numbers and solar storm events are real NASA data (DONKI, LRO CRaTER via RadLab,
+  BVAD; see *Data and sources*). AI only wrote the scripts that download and format them. The Astronomy Tower pictures
+  are NASA's Astronomy Picture of the Day, loaded live. The game has no AI-generated images, audio or video:
+  everything on screen is drawn by code.

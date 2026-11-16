@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Side panel, pop-ups and the debrief. DOM text is updated once per game hour, not every frame.
 (function (root) {
   'use strict';

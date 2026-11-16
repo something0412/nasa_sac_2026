@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Game loop: fixed simulation tick (1 game hour) separate from 60 fps drawing.
 (function () {
   'use strict';

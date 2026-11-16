@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Drawing the map. Runs every frame (60 fps). Reads the sim state, never changes it.
 // The world is bigger than the screen: a camera (cam.x, cam.y = top-left corner in world pixels)
 // picks which part we see. Drag the map to move the camera.

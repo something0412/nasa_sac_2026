@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Run: node --test tests/save.test.js   (from the project root)
 // Saving and loading must give back EXACTLY the same game: after loading, the game plays on hour by
 // hour just like the game that was never saved.

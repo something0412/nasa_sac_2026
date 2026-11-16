@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Saving and loading games. Saves live only on this device (IndexedDB, database "lunar-world").
 // To move a game to another computer, export it to a .json file and import it there.
 //

@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Where each astronaut is walking on the map, shared by BOTH views (top-down and 2.5D).
 // Positions are in grid squares (c, r). js/view.js updates this once per frame, whichever view is
 // showing, so switching views never makes an astronaut start walking again from an old spot.

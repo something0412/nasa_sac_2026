@@ -1,3 +1,4 @@
+// Written with help from Claude Code (AI); reviewed and tested by the team.
 // Isometric (2.5D) math: turns grid squares into diamond positions on screen, and back.
 // The game rules (sim.js) only know grid squares (c = column, r = row). This file is only about
 // WHERE to draw them in an isometric view, and WHICH square the mouse is pointing at.

@@ -2,12 +2,132 @@
 // "REAL" = from a NASA/science source. "GAME" = tuned for fun, but in a realistic range.
 (function (root) {
   'use strict';
-  const MT = (root.MT = root.MT || {});
+  const LW = (root.LW = root.LW || {});
 
-  MT.CONFIG = {
-    missionHours: 720, // 30 days
-    crew: 4,
-    workers: 2, // astronauts who go outside to build (EVA)
+  LW.CONFIG = {
+    // ENDLESS: the game keeps going until no astronaut is left on the Moon. The world (space weather,
+    // sunlight forecast, meteor showers) is made 30 days (chunkH) at a time, as the game goes on.
+    chunkH: 720,
+    crew: 4, // at the start; every crew spaceship brings more
+    endless: {
+      shipEveryH: 30 * 24, // GAME: a crew spaceship lands every 30 days...
+      shipWarnH: 5 * 24,   // ...announced 5 days before. It brings a new HAB, new astronauts, and restocks the medbay.
+      newCrew: 2,
+      // GAME: what running out of things does now (health lost per hour, per astronaut). The medbay can heal it.
+      harm: { noO2PerH: 8, coldPerH: 2, hungerPerH: 1, thirstPerH: 1.5 },
+    },
+    // ROVER (bought with a button, not built on the map): drives up to 4 astronauts between HABs.
+    rover: { cost: 15, seats: 4, tilesPerH: 12 }, // GAME: 12 tiles (120 m) per game hour, at least 1 hour per trip
+    // WALKING: an Engineer first walks from their HAB to the job site; the work only starts once they get there.
+    walk: { tilesPerH: 6 }, // GAME: 6 squares (60 m) per game hour in a bulky suit carrying tools (the rover is 2x faster)
+    // LANDING PAD: crew spaceships can only land on a finished Landing Pad that is within `radius` squares of a
+    // finished HAB (centre to centre), and no two pads may be within `radius` of each other (each pad has its own
+    // area, so it is clear which HAB its astronauts belong to). No such pad when the ship arrives = it turns back.
+    pad: { radius: 6 },
+    // Every job (new building, repair, moon-dirt shield) gets exactly ONE astronaut: the Engineer the player
+    // picked. The player always picks an astronaut first, then what they should build or use.
+
+    // ----- Astronaut Management System (AMS): per-astronaut Health, Stress and Bone density -----
+    astro: {
+      names: ['Astronaut 1', 'Astronaut 2', 'Astronaut 3', 'Astronaut 4'],
+      // ROLES: only Engineers build and repair, only the Scientist uses the Research Bay,
+      // only the Botanist works in the greenhouse. Anyone can use the Astronomy Tower and Fitness Center.
+      roles: ['engineer', 'engineer', 'scientist', 'botanist'],
+      roleInfo: {
+        engineer: { name: 'Engineer', icon: '🔧', color: '#ffb35c', does: 'builds and repairs' },
+        scientist: { name: 'Scientist', icon: '🔬', color: '#6fd3ff', does: 'researches upgrades in the Research Bay' },
+        botanist: { name: 'Botanist', icon: '🌱', color: '#7fe08a', does: 'tends the greenhouse (2x food for 1 day)' },
+      },
+      // HEALTH (HP 0-100) = radiation received over the whole session, plus injuries. Never restored.
+      // REAL: NASA's career radiation limit is 600 mSv (NASA-STD-3001, 2022), so 600 mSv = the whole bar.
+      // Living in the habitat (50% blocked) that takes ~880 days (~2.4 years); with the moon-dirt shield ~6 years.
+      hpPerMsv: 100 / 600,
+      // STRESS (0-100)
+      stress: {
+        outsidePerH: 1.5,     // GAME: social isolation while working alone outside
+        stormOutsidePerH: 3,  // GAME: caught outside in a radiation storm (on top of the isolation)
+        stormInsidePerH: 0.2, // GAME: waiting out a storm in the habitat or gym (real storms can last ~10 days)
+        stormShelterPerH: 0.1, // GAME: the shelter is cramped but safe
+        meteorOutsidePerH: 6, // GAME: caught outside in a meteor shower
+        meteorInsidePerH: 1,
+        towerRelief: 30,      // GAME: the astronaut who visits an Astronomy Tower feels calmer (just them)
+        towerCooldownH: 12,   // GAME: each tower can be visited again 12 hours later
+        gymReliefPerH: 25,    // GAME: each hour of training lowers stress (a 2-hour session = -50). REAL: NASA counts
+        //                       exercise as a countermeasure for mood and stress on long missions, not just for bones.
+
+        slowAt: 75,           // at or above this, an astronaut works at half speed
+        slowFactor: 0.5,
+      },
+      // BONE DENSITY (% of what they had on Earth)
+      // REAL: on the ISS (no gravity) astronauts lose ~1-1.5% of hip bone per MONTH and exercise ~2 h a day.
+      // GAME: Moon gravity is 1/6 of Earth's; we speed bone loss up to ~1% per DAY so it matters in a 30-day mission.
+      bone: {
+        lossPerH: 1 / 24,
+        gymGainPerH: 2,      // each hour in the Fitness Center
+        visitEveryH: 24,     // the AMS shows "Needs training" after this many hours without the gym (the player sends them)
+        visitH: 2,           // a session lasts 2 hours (one astronaut per Fitness Center at a time)
+        injuryBelow: 85,     // below this: chance of a small injury (sprain) each hour
+        injuryChancePerH: 0.03,
+        injuryHp: 3,
+        groundedBelow: 75,   // below this: not allowed outside (no building or repairs) until they train back up
+        fragileBelow: 50,    // below this: FRAGILE BONES: fractures, injuries 2x as likely and 2x as harmful, worry adds stress
+        fragileMult: 2,
+        fragileStressPerH: 0.5,
+        severeBelow: 25,     // below this: SEVERE BONE LOSS: injuries 3x, more stress, gym training only half as effective (gentle rehab)
+        severeMult: 3,
+        severeStressPerH: 1,
+        severeGymFactor: 0.5,
+        // At 0% an astronaut goes to the medbay for the rest of the mission.
+      },
+      // MEDBAY (inside the habitat): an astronaut rests there for 3 days and heals exactly healHp of
+      // injuries (meteoroid hits, sprains, fractures; smallest first). Radiation damage can never be healed:
+      // it sets the highest health they can ever get back to (the purple part of the health bar).
+      medbay: { healH: 72, healHp: 10, uses: 2 }, // uses: total for the whole mission
+    },
+
+    // ----- weather events that can damage buildings -----
+    damage: {
+      canBreak: ['solar', 'o2gen', 'drill', 'greenhouse', 'gym', 'tower', 'lab'],
+      stormChance: 0.08,         // GAME: chance per building each time a radiation storm (or a new wave) starts: electronics glitch
+      meteorChancePerH: 0.04,    // GAME: chance per building per hour of meteor shower
+      brokenRate: 0.5,           // damaged buildings make things at half speed (towers, gyms and Research Bays can't be used at all)
+      repairCost: 1,             // parts
+      repairWork: 0.5,           // repair takes half the work of building it
+    },
+    // ----- accidents: random mishaps with machines that cost supplies -----
+    // About one accident every 3-4 days (only working machines; none on day 1).
+    accidents: {
+      chancePerH: 0.012,
+      startH: 24,
+      drill: { water: 25 },              // a pipe freezes and cracks: water leaks out
+      greenhouse: { food: 12 },          // plant disease: crops are thrown away
+      o2gen: { o2: 5 },                  // a valve leaks: stored oxygen escapes
+      // REAL: moondust is electrically charged and sticks to everything (Apollo crews had it on suits,
+      // tools and instruments). A dusty panel makes half power for a day, and shaking it clean uses battery.
+      solar: { battery: 12, dustH: 24, dustFactor: 0.5 },
+    },
+
+    // ----- Research Bay: the Scientist spends 1 day there to research an upgrade -----
+    // Upgrades work only for buildings within `radius` tiles of a working (not damaged) Research Bay.
+    research: {
+      targets: ['solar', 'o2gen', 'drill'],
+      levelBoost: 0.5,       // each level: +50% production
+      maxLevel: 2,           // level 2 = 2x
+      costBase: 2,           // parts for the first upgrade...
+      costStep: 2,           // ...and each upgrade after that costs 2 more (2, 4, 6, 8, ...)
+      hours: 24,             // hours of lab work (the shelter pauses it; radiation inside = like the habitat)
+      radius: 10,            // tiles (100 m), measured centre to centre
+      accidentChancePerH: 0.008, // GAME: rare micro-explosion during an experiment
+      accidentHp: 6,             // same as a small fracture
+    },
+    // ----- Botanist: spends 1 day in a greenhouse; that greenhouse makes 2x food meanwhile -----
+    botany: { hours: 24, mult: 2, accidentChancePerH: 0.008, accidentHp: 6 },
+
+    meteor: {
+      warnLead: 6,               // REAL: meteor showers are predictable (Earth and Moon cross the same comet dust every year)
+      hitChancePerH: 0.3,        // GAME: chance an astronaut caught OUTSIDE is hit by a tiny meteoroid each hour
+      hitHp: [6, 14],            // GAME: HP lost when hit
+    },
 
     // The world is 80 x 56 tiles; the camera shows 20 x 14 of them. Drag to look around.
     map: { cols: 80, rows: 56, tile: 40, viewCols: 20, viewRows: 14 },
@@ -27,30 +147,54 @@
     },
     // Terrain features in 0..1 map coordinates (u = left→right, v = top→bottom), so they scale with the map.
     // Ovals: centre (u, v), radius (ru, rv). The first match wins. Labels are drawn on the map.
+    // height (2.5D view only, GAME): how many terrace steps a hill rises (+) or a crater sinks (-) at its
+    // middle. The steps start at its edge. The game rules ignore it (zones decide sunlight and building).
     features: [
-      { zone: 'ice', u: 0.82, v: 0.76, ru: 0.2, rv: 0.22, label: 'SHADOWED CRATER (ICE)' },
-      { zone: 'ice', u: 0.12, v: 0.86, ru: 0.07, rv: 0.09, label: 'SMALL ICE CRATER' },
-      { zone: 'ice', u: 0.47, v: 0.09, ru: 0.055, rv: 0.07, label: 'ICE CRATER' },
-      { zone: 'ridge', corner: 0.36, u: 0.1, v: 0.06, label: 'HIGH RIDGE (crater rim)' }, // top-left triangle
-      { zone: 'ridge', u: 0.9, v: 0.12, ru: 0.11, rv: 0.13, label: 'HIGH HILL' },
-      { zone: 'ridge', u: 0.27, v: 0.68, ru: 0.06, rv: 0.08, label: 'SMALL HILL' },
-      { zone: 'ridge', u: 0.66, v: 0.3, ru: 0.035, rv: 0.05, label: 'ROCKY KNOB' },
+      { zone: 'ice', u: 0.82, v: 0.76, ru: 0.2, rv: 0.22, height: -5, label: 'SHADOWED CRATER (ICE)' },
+      { zone: 'ice', u: 0.12, v: 0.86, ru: 0.07, rv: 0.09, height: -3, label: 'SMALL ICE CRATER' },
+      { zone: 'ice', u: 0.47, v: 0.09, ru: 0.055, rv: 0.07, height: -3, label: 'ICE CRATER' },
+      { zone: 'ridge', corner: 0.36, u: 0.1, v: 0.06, height: 5, label: 'HIGH RIDGE (crater rim)' }, // top-left triangle
+      { zone: 'ridge', u: 0.9, v: 0.12, ru: 0.11, rv: 0.13, height: 5, label: 'HIGH HILL' },
+      { zone: 'ridge', u: 0.27, v: 0.68, ru: 0.06, rv: 0.08, height: 3, label: 'SMALL HILL' },
+      { zone: 'ridge', u: 0.66, v: 0.3, ru: 0.035, rv: 0.05, height: 2, label: 'ROCKY KNOB' },
     ],
-    zoneAt(c, r) {
+    // The feature a square is in (first match wins) and how far it is from the feature's middle
+    // (d: 0 = middle, just under 1 = edge), or null on the open plain.
+    featureAt(c, r) {
       const u = (c + 0.5) / this.map.cols, v = (r + 0.5) / this.map.rows;
       const wobble = 0.025 * Math.sin(u * 23) + 0.02 * Math.sin(v * 31); // makes edges less perfect
       for (const f of this.features) {
-        const inside = f.corner ? u + v + wobble < f.corner : ((u - f.u) / f.ru) ** 2 + ((v - f.v) / f.rv) ** 2 < 1 + wobble * 4;
-        if (inside) return f.zone;
+        if (f.corner) {
+          const s = u + v + wobble;
+          if (s < f.corner) return { f, d: s / f.corner };
+        } else {
+          const q = ((u - f.u) / f.ru) ** 2 + ((v - f.v) / f.rv) ** 2, lim = 1 + wobble * 4;
+          if (q < lim) return { f, d: Math.sqrt(q / lim) };
+        }
       }
-      return 'plain';
+      return null;
+    },
+    zoneAt(c, r) {
+      const k = this.featureAt(c, r);
+      return k ? k.f.zone : 'plain';
+    },
+    // Terrace level of a square for the 2.5D view: 0 on the plain, 1 at a feature's edge, up to `height` in its middle.
+    heightAt(c, r) {
+      const k = this.featureAt(c, r);
+      if (!k || !k.f.height) return 0;
+      return Math.sign(k.f.height) * Math.ceil((1 - k.d) * Math.abs(k.f.height));
     },
 
     modules: {
       hab: {
-        name: 'Habitat', icon: '🏠', w: 2, h: 2, cost: 0, work: 0, priority: 0,
+        name: 'Habitat', icon: '🏠', w: 2, h: 2, cost: 15, work: 16, priority: 0,
         power: 1.5, heatInDark: 1.0, // GAME: life systems + extra heaters when in shadow
-        desc: 'Home for 4 astronauts. Needs power for air fans, computers and heaters.',
+        desc: 'Home for the crew (2 x 2). Needs power for air fans, computers and heaters. New astronauts from a crew spaceship move into the HAB you choose.',
+      },
+      pad: {
+        name: 'Landing Pad', icon: '🛬', w: 2, h: 2, cost: 10, work: 8, // GAME: flat, packed moon dirt; no power
+        desc: 'Crew spaceships land here (every 30 days); the new astronauts live in the closest HAB. Must be within 6 squares of a HAB and more than 6 squares from any other pad. No pad next to a finished HAB = the ship turns back.',
+
       },
       solar: {
         name: 'Solar Panel', icon: '☀️', w: 1, h: 1, cost: 2, work: 6, makes: 4, // GAME: 4 kW tall vertical panel
@@ -81,23 +225,33 @@
       },
       tower: {
         name: 'Astronomy Tower', icon: '🔭', w: 1, h: 1, cost: 2, work: 6, // GAME: no power use yet
-        desc: "A small telescope dome. Click it when it's built to see NASA's Astronomy Picture of the Day.",
+        desc: "A small telescope dome. Pick an astronaut, then click it: they look at a NASA space picture and their stress drops. Each tower can be used every 12 hours.",
+      },
+      lab: {
+        name: 'Research Bay', icon: '🔬', w: 1, h: 1, cost: 4, work: 10, // GAME: no power use yet
+        desc: 'The Scientist spends 1 day here researching upgrades: nearby Solar Panels, O₂ Generators and Ice Drills work faster (up to 2x). Only buildings within 10 tiles get the boost.',
+      },
+      gym: {
+        name: 'Fitness Center', icon: '🏋️', w: 1, h: 1, cost: 3, work: 8, priority: 5,
+        power: 1, // GAME: treadmill + resistance machine; first to shut off when power is low
+        desc: 'Pick an astronaut and click it to train for 2 hours: keeps bones strong in low gravity and lowers stress. Each astronaut needs this about once a day. One at a time.',
+
       },
     },
-    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower'],
+    buildOrder: ['solar', 'battery', 'o2gen', 'greenhouse', 'drill', 'shelter', 'tower', 'gym', 'lab', 'hab', 'pad'], // keys 1-9 pick the first 9
     bermWork: 36, // crew-hours to pile regolith (moon dirt) on the habitat
 
     // REAL: an adult uses about 0.84 kg O2 and ~1.8 kg food (with packaging) per day (NASA BVAD, NASA/TP-2015-218570).
     use: { o2PerPersonH: 0.84 / 24, foodPerPersonH: 1.8 / 24, waterPerPersonH: 0.5 / 24 /* GAME: water lost after recycling */ },
 
-    start: { o2: 25, food: 60, water: 150, battery: 30, parts: 20 },
+    start: { o2: 25, food: 60, water: 150, battery: 30, parts: 25 },
     caps: { o2: 40, water: 300 },
 
     rad: {
       surfacePerH: 1.369 / 24, // REAL: Chang'e-4 measured 1.369 mSv/day on the lunar surface (Zhang et al. 2020)
-      hab: 0.5, habBerm: 0.2, shelter: 0.05, // GAME: fraction of radiation that gets through
-      limit: 250, // REAL: NASA 30-day crew limit for blood-forming organs, 250 mGy-Eq (NASA-STD-3001)
-      warn: 150,
+      hab: 0.5, habBerm: 0.2, shelter: 0.05, // GAME: fraction of radiation that gets through (gym = like the habitat)
+      rover: 0, // GAME: the rover is fully shielded: nobody gets any radiation while driving between HABs
+      // (The old 250 mSv whole-crew limit is gone: each astronaut now has their own Health, see astro.hpPerMsv.)
       // REAL DATA: storm radiation is the dose NASA's Lunar Reconnaissance Orbiter actually measured
       // (CRaTER instrument, via NASA's RadLab API, saved in data/radlab.js by tools/build_radlab.py).
       // To turn "extra micro-gray per hour measured in lunar orbit" into "mSv per hour for a person
@@ -121,13 +275,15 @@
     },
 
     habTemp: { normal: 21, fail: 5, heat: 3, coolDark: 2.0, coolLit: 0.8 },
-    fail: { foodGraceH: 72, waterGraceH: 48 },
+    fail: { foodGraceH: 72, waterGraceH: 48 }, // after this long without food / water the crew starts losing health
 
-    cargo: [{ h: 240 }, { h: 480 }],
+    cargoEveryH: 240, // a cargo lander every 10 days (you choose what it carries 2 days before)
+
     cargoAskLead: 48,
     cargoOptions: {
       food: { name: 'Food pack', icon: '🍞', text: '+60 kg food', give: { food: 60 } },
-      parts: { name: 'Building parts', icon: '🔩', text: '+10 parts', give: { parts: 10 } },
+      parts: { name: 'Building parts', icon: '🔩', text: '+30 parts', give: { parts: 30 } },
+
       life: { name: 'Water & air', icon: '💧', text: '+60 kg water, +15 kg O₂', give: { water: 60, o2: 15 } },
     },
   };

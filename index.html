@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Junior Astronaut Mission Trainer</title>
+<title>Lunar World</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -18,6 +18,7 @@
     <span class="sunLabel">☀️ Sunlight</span>
     <canvas id="forecast" width="900" height="40" aria-label="Sunlight forecast"></canvas>
   </div>
+  <button id="viewBtn" class="viewBtn" title="Switch the map between top-down and 2.5D (V)">🧊 2.5D view</button>
   <div class="clock"><span id="clockDay">Day 1</span><span id="clockHour">00:00</span><span id="scenarioTag" class="tag"></span></div>
 </header>
 
@@ -45,18 +46,26 @@
       <header data-toggle="log"><h2>📜 <span class="lbl">Mission log</span><span class="short">Log</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
       <ol id="log" class="log"></ol>
     </section>
+    <section class="panel" data-panel="ams">
+      <header data-toggle="ams"><h2>👩‍🚀 <span class="lbl">Astronaut Management System (AMS)</span><span class="short">AMS</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <div id="ams" class="ams"></div>
+    </section>
   </div>
 
   <!-- right column: build -->
   <div class="dock right">
     <section class="panel" data-panel="build">
       <header data-toggle="build"><h2>🔨 Build <span class="muted">(parts: <b id="parts">0</b>)</span></h2><button class="pClose" aria-label="Collapse or expand">–</button></header>
+      <div class="pickLabel muted small"><b>1.</b> Pick an astronaut · <b>2.</b> pick what to build, or click a building</div>
+      <div id="crewPick" class="crewPick" role="group" aria-label="Pick an astronaut"></div>
       <div id="buildMenu" class="buildMenu"></div>
       <div class="actions">
+        <button id="roverBtn" class="wide">🚙 Build a rover</button>
         <button id="bermBtn" class="wide">⛰️ Shield habitat with moon dirt <small>(0 parts, 36 crew-hours)</small></button>
         <button id="shelterBtn" class="wide">🛡️ Send crew to shelter</button>
       </div>
       <div id="jobLine" class="muted small"></div>
+      <div id="researchLine" class="muted small"></div>
     </section>
   </div>
 
@@ -75,7 +84,7 @@
     </section>
   </div>
 
-  <div class="mapHint">🖐️ Drag to look around · <b>H</b> = back to base</div>
+  <div class="mapHint">🖐️ Drag to look around · <b>H</b> = back to base · <b>V</b> = switch view · <b>scroll</b> = zoom</div>
 </main>
 
 <div id="modal" class="modal" hidden><div class="modalBox" role="dialog" aria-modal="true"><div id="modalBody"></div></div></div>
@@ -83,8 +92,13 @@
 <script src="data/may2024.js"></script>
 <script src="data/radlab.js"></script>
 <script src="js/config.js"></script>
+<script src="js/iso.js"></script>
 <script src="js/sim.js"></script>
+<script src="js/shapes.js"></script>
+<script src="js/crew_motion.js"></script>
 <script src="js/render.js"></script>
+<script src="js/render_iso.js"></script>
+<script src="js/view.js"></script>
 <script src="js/apod.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>

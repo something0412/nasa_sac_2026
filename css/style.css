@@ -24,6 +24,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .speed { display: flex; gap: 4px; flex: none; }
 .speed button { min-width: 42px; padding: 5px 8px; }
 .speed button.on { background: var(--accent); color: #08101e; border-color: var(--accent); font-weight: 700; }
+.viewBtn { flex: none; white-space: nowrap; padding: 5px 10px; }
 
 /* the map fills everything under the top bar; panels float on top of it */
 html, body { height: 100%; overflow: hidden; }
@@ -73,7 +74,30 @@ html, body { height: 100%; overflow: hidden; }
 .bar[data-level=warn] .fill { background: var(--warn); }
 .bar[data-level=bad] .fill { background: var(--bad); }
 .bar[data-level=bad] .val { color: var(--bad); font-weight: 700; }
-.bar:nth-child(5) .fill { background: #c86bff; }
+.bar:nth-child(5) .fill { background: #ff7a9a; } /* crew health */
+/* Astronaut Management System (AMS) */
+#jobLine { white-space: pre-line; margin-top: 6px; }
+.ams { display: grid; gap: 6px; }
+.amsRow { background: rgba(10, 14, 22, 0.55); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.amsRow.gone { opacity: 0.55; }
+.amsHead { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.amsId { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: #0a0e16; color: var(--gold); font-size: 11px; font-weight: 700; }
+.amsWhere { font-size: 11px; color: var(--muted); margin: 2px 0 4px; }
+.amsStat { display: grid; grid-template-columns: 62px 1fr 26px; align-items: center; gap: 6px; font-size: 11px; }
+.amsStat b { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.amsStat .track { margin-top: 0; height: 6px; }
+.amsTop { font-size: 11px; color: var(--muted); }
+.amsTop b { color: var(--text); }
+/* Health bar: purple grows from the right = radiation damage that can never be healed */
+.hpTrack { position: relative; }
+.hpTrack .radCap { position: absolute; top: 0; right: 0; bottom: 0; background: #a35cff; transition: width 0.3s; }
+.healBtn { margin-top: 5px; width: 100%; font-size: 11px; padding: 4px 6px; background: #1d2a3f; border-color: #2f4a70; }
+.healBtn:hover { border-color: var(--accent); }
+.amsStat[data-level=warn] .fill { background: var(--warn); }
+.amsStat[data-level=bad] .fill { background: var(--bad); }
+.flag { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; }
+.flag.warn { color: var(--warn); }
+.flag.bad { color: var(--bad); }
 .bar:nth-child(5)[data-level=warn] .fill { background: var(--warn); }
 .bar:nth-child(5)[data-level=bad] .fill { background: var(--bad); }
 
@@ -242,3 +266,64 @@ html, body { height: 100%; overflow: hidden; }
 .panel.unread[data-level=bad] h2 .dot { background: var(--bad); }
 @keyframes dotPulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .panel.unread h2 .dot { animation: none; } }
+
+/* ----- pick an astronaut first (Build panel) + roles ----- */
+.pickLabel { margin-bottom: 4px; }
+.crewPick { display: grid; grid-template-columns: 1fr; gap: 3px; margin-bottom: 8px; }
+.crewBtn { display: grid; grid-template-columns: 18px auto 1fr; align-items: center; column-gap: 6px; text-align: left; padding: 3px 6px; border-left: 3px solid var(--rc); }
+.crewBtn .cr { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.crewBtn small { font-size: 10px; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.crewBtn.sel { border-color: var(--gold); background: #2f2a17; box-shadow: 0 0 0 1px var(--gold) inset; }
+.crewPick.nudge { animation: nudge 0.5s ease-in-out 2; }
+@keyframes nudge { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@media (prefers-reduced-motion: reduce) { .crewPick.nudge { animation: none; outline: 2px solid var(--gold); } }
+.buildBtn.locked:not(:disabled) { opacity: 0.6; }
+#researchLine { margin-top: 4px; }
+#researchLine:empty, #jobLine:empty { display: none; }
+.role { font-size: 10px; padding: 1px 6px; border-radius: 999px; color: var(--rc); border: 1px solid var(--rc); }
+.amsRow[data-crew] { cursor: pointer; }
+.amsRow[data-crew]:hover { border-color: var(--accent); }
+.amsRow.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+.choice:disabled { opacity: 0.45; }
+
+/* ----- compact AMS: as small as possible, scrolls when the crew grows ----- */
+.ams { gap: 3px; max-height: calc(100vh - 260px); overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+.ams .amsRow { padding: 3px 6px; border-radius: 6px; }
+.ams .amsHead { gap: 4px; flex-wrap: nowrap; font-size: 12px; min-width: 0; }
+.ams .amsHead b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.ams .amsId { width: 16px; height: 16px; font-size: 10px; flex: none; box-shadow: inset 0 0 0 1px var(--rc, transparent); }
+.ams .rIco { font-size: 11px; flex: none; }
+.ams .flag { padding: 0 3px; font-size: 10px; flex: none; border-radius: 4px; }
+.ams .healBtn { margin: 0 0 0 auto; width: auto; flex: none; font-size: 10px; padding: 1px 6px; }
+.ams .amsWhere { font-size: 10px; margin: 1px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amsBars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.amsBars .amsStat { grid-template-columns: 13px 1fr 20px; gap: 3px; font-size: 10px; }
+.amsBars .amsStat .track { height: 5px; }
+.ams .amsTop { font-size: 11px; }
+.crewPick { max-height: 160px; overflow-y: auto; scrollbar-width: thin; }
+
+/* ----- crew spaceship landing (TEMPORARY cartoon, plays over the map in both views) ----- */
+/* --lx / --ly = where it touches down (the Landing Pad on screen); default = the middle of the map. */
+.landing { --lx: 50%; --ly: 50%; position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+.lShip { position: absolute; left: var(--lx); top: -190px; transform: translateX(-50%); animation: lDescend 2.6s cubic-bezier(.2,.7,.3,1) forwards, lBob 0.5s 2.6s ease-out 1; }
+.lShip svg { display: block; filter: drop-shadow(0 8px 10px rgba(0,0,0,.5)); }
+.lFlame { transform-origin: 60px 116px; animation: lFlame 0.12s infinite alternate, lFlameOut 0.4s 2.4s forwards; }
+.lDust { position: absolute; left: var(--lx); top: calc(var(--ly) - 7px); width: 40px; height: 14px; margin-left: -20px; border-radius: 50%; background: rgba(200,200,205,.7); opacity: 0; animation: lDust 1.4s 2.2s ease-out forwards; }
+.lText { position: absolute; left: var(--lx); top: calc(var(--ly) + 26px); transform: translateX(-50%); padding: 6px 14px; border-radius: 999px; background: rgba(12,16,26,.9); border: 1px solid var(--gold); color: var(--gold); font-weight: 700; opacity: 0; animation: lText 0.5s 2.5s forwards; white-space: nowrap; }
+@keyframes lDescend { from { top: -190px; } to { top: calc(var(--ly) - 150px); } } /* the legs (150 px down the picture) end on the spot */
+@keyframes lBob { 50% { margin-top: 4px; } }
+@keyframes lFlame { from { transform: scaleY(1); } to { transform: scaleY(0.6); } }
+@keyframes lFlameOut { to { opacity: 0; } }
+@keyframes lDust { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(9, 4); } }
+@keyframes lText { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .lShip { animation: none; top: calc(var(--ly) - 150px); } .lFlame, .lDust { animation: none; opacity: 0; } .lText { animation: none; opacity: 1; } }
+
+/* ----- new crew roles + rover dialogs ----- */
+.newCrew { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.roleChoice { display: flex; gap: 6px; flex-wrap: wrap; }
+.roleChoice button { border-left: 3px solid var(--rc); }
+.roleChoice button.on { border-color: var(--gold); background: #2f2a17; box-shadow: 0 0 0 1px var(--gold) inset; }
+.roverCrew, .roverDest { display: grid; gap: 4px; margin: 6px 0; }
+.roverCrew label, .roverDest label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.roverCrew .amsId { box-shadow: inset 0 0 0 1px var(--rc, transparent); }
